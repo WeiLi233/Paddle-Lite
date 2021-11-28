@@ -14,6 +14,7 @@
 
 #include "lite/kernels/xpu/gather_compute.h"
 #include <vector>
+#include "lite/backends/xpu/target_wrapper.h"
 #include "lite/backends/xpu/xpu_header_sitter.h"
 #include "lite/core/op_registry.h"
 
@@ -58,6 +59,62 @@ void GatherCompute<DataType, IndexType>::Run() {
   CHECK_EQ(r, 0);
 }
 
+static void Xpu2Host(const Tensor& src, Tensor* dst) {
+  dst->Resize(src.dims());
+  dst->set_precision(src.precision());
+  auto mem_size = src.memory_size();
+  auto* data = dst->mutable_data(TARGET(kHost), mem_size);
+  TargetWrapperXPU::MemcpySync(
+      data, src.raw_data(), mem_size, IoDirection::DtoH);
+}
+
+static void Host2Xpu(const Tensor& src, Tensor* dst) {
+  dst->Resize(src.dims());
+  dst->set_precision(src.precision());
+  auto mem_size = src.memory_size();
+  auto* data = dst->mutable_data(TARGET(kXPU), mem_size);
+  TargetWrapperXPU::MemcpySync(
+      data, src.raw_data(), mem_size, IoDirection::HtoD);
+}
+
+template <typename DataType, typename IndexType>
+void GatherFunc(const Tensor* x, const Tensor* index, Tensor* out) {
+  auto x_dims = x->dims() auto index_size = index->dims()[0];
+  auto* p_src = x->data<DataType>();
+  const IndexType* p_index = index->data<IndexType>();
+  auto* p_output = out->mutable_data<DataType>();
+
+  int slice_size = 1;
+  for (size_t i = 1; i < x_dims.size(); ++i) {
+    slice_size *= x_dims[i];
+  }
+  for (int i = 0; i < index_size; ++i) {
+    IndexType index_ = p_index[i];
+    memcpy(p_output + i * slice_size,
+           p_src + index_ * slice_size,
+           slice_size * sizeof(DataType));
+  }
+}
+
+template <>
+void GatherCompute<int64_t, int32_t>::Run() {
+  auto& param = this->template Param<param_t>();
+  auto& ctx = this->ctx_->template As<XPUContext>();
+
+  auto x = param.X;
+  auto index = param.Index;
+  auto out = param.Out;
+
+  Tensor x_t, index_t, out_t;
+  Xpu2Host(*x, &x_t);
+  Xpu2Host(*index, &index_t);
+  out_t.Resize(out->dims());
+
+  GatherFunc<int64_t, int32_t>(&x_t, &index_t, &out_t);
+
+  Host2Xpu(out_t, out);
+}
+
 }  // namespace xpu
 }  // namespace kernels
 }  // namespace lite
@@ -87,7 +144,7 @@ REGISTER_LITE_KERNEL(
                {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
     .BindInput("Axis",
                {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
-    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU))})
+    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
     .Finalize();
 REGISTER_LITE_KERNEL(
     gather, kXPU, kFloat, kNCHW, GatherXPUInt32Int64, gather_i32_i64)
@@ -96,7 +153,17 @@ REGISTER_LITE_KERNEL(
                {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt64))})
     .BindInput("Axis",
                {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
-    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU))})
+    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
+    .Finalize();
+
+REGISTER_LITE_KERNEL(
+    gather, kXPU, kFloat, kNCHW, GatherXPUInt32Int32, gather_i64_i32)
+    .BindInput("X", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt64))})
+    .BindInput("Index",
+               {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
+    .BindInput("Axis",
+               {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
+    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt64))})
     .Finalize();
 REGISTER_LITE_KERNEL(
     gather, kXPU, kFloat, kNCHW, GatherXPUInt64Int32, gather_i64_i32)
