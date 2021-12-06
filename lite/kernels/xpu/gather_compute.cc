@@ -79,7 +79,8 @@ static void Host2Xpu(const Tensor& src, Tensor* dst) {
 
 template <typename DataType, typename IndexType>
 void GatherFunc(const Tensor* x, const Tensor* index, Tensor* out) {
-  auto x_dims = x->dims() auto index_size = index->dims()[0];
+  auto x_dims = x->dims();
+  auto index_size = index->dims()[0];
   auto* p_src = x->data<DataType>();
   const IndexType* p_index = index->data<IndexType>();
   auto* p_output = out->mutable_data<DataType>();
@@ -99,7 +100,6 @@ void GatherFunc(const Tensor* x, const Tensor* index, Tensor* out) {
 template <>
 void GatherCompute<int64_t, int32_t>::Run() {
   auto& param = this->template Param<param_t>();
-  auto& ctx = this->ctx_->template As<XPUContext>();
 
   auto x = param.X;
   auto index = param.Index;
