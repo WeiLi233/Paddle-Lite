@@ -62,11 +62,13 @@ bool ReshapeOp::AttachImpl(const cpp::OpDesc &opdesc, lite::Scope *scope) {
   param_.output =
       scope->FindVar(opdesc.Output("Out").front())->GetMutable<lite::Tensor>();
   CHECK(param_.output);
-
+  param_.my_debug_X_ = opdesc.Input("X").front();
+  
   // prority: input(ShapeTensor) > input(Shape) > attr(shape)
   param_.shape_tensor_vct.clear();
   if (opdesc.HasInput("ShapeTensor") && !opdesc.Input("ShapeTensor").empty()) {
     auto args = opdesc.Input("ShapeTensor");
+    param_.my_debug_ShapeTensor_ = args;
     for (auto arg : args) {
       auto *var = scope->FindVar(arg);
       if (var != nullptr) {

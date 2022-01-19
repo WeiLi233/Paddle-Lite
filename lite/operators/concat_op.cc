@@ -50,6 +50,12 @@ bool ConcatOpLite::InferShapeImpl() const {
       if (j == static_cast<size_t>(axis)) {
         out_dims[axis] += input_dims_i[j];
       } else {
+        VLOG(3) << "CONCAT DEBUG: ";
+        VLOG(3) << "INPUT SIZE: " << n;
+        VLOG(3) << "IJ: " << i << ' ' << j;
+        for(size_t xx=0; xx<n; xx++) {
+          VLOG(3) << param_.my_debug_x_vec_[xx] << ' ' << inputs[xx]->dims();
+        }
         CHECK_EQ_OR_FALSE(out_dims[j], input_dims_i[j]);
       }
     }
@@ -68,7 +74,8 @@ bool ConcatOpLite::InferShapeImpl() const {
 bool ConcatOpLite::AttachImpl(const cpp::OpDesc &op_desc, lite::Scope *scope) {
   auto inputs = op_desc.Input("X");
   auto out = op_desc.Output("Out").front();
-
+  param_.my_debug_x_vec_ = inputs;
+  param_.my_debug_output_ = out;
   param_.x.clear();
   for (auto var : inputs) {
     param_.x.push_back(scope->FindVar(var)->GetMutable<lite::Tensor>());

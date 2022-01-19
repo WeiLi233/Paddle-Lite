@@ -30,6 +30,19 @@ void TileCompute<T, PType>::Run() {
       repeat_times.push_back(param.RepeatTimes->template data<int>()[i]);
     }
   }
+  
+  if(! param.repeat_times_tensor.empty()) {
+    size_t repeat_times_tensor_size = param.repeat_times_tensor.size();
+    for(size_t i=0; i<repeat_times_tensor_size; i++) {
+      repeat_times.push_back(param.repeat_times_tensor[i]->template data<int32_t>()[0]);
+    }
+  }
+  if(! param.repeat_times.empty()) {
+    for(auto v: param.repeat_times) {
+      repeat_times.push_back(v);
+    }
+  }
+
   auto in_dims = param.X->dims();
   auto vec_in_dims = in_dims.Vectorize();
   // broadcast for vec_in_dims.size() equal to repeat_times.size()
