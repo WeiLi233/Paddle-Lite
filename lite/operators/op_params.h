@@ -259,6 +259,8 @@ struct SoftmaxParam : ParamBase {
 
 // For Reshape and Reshape2 Op
 struct ReshapeParam : ParamBase {
+  std::string my_debug_X_;
+  std::vector<std::string> my_debug_ShapeTensor_;
   const lite::Tensor* x{};
   std::vector<const lite::Tensor*> shape_tensor_vct{};
   const lite::Tensor* shape_tensor{};
@@ -275,6 +277,8 @@ struct ReshapeParam : ParamBase {
 
 // For Concat op
 struct ConcatParam : ParamBase {
+  std::vector<std::string> my_debug_x_vec_;
+  std::string my_debug_output_;
   std::vector<lite::Tensor*> x{};
   lite::Tensor* output{};
   int axis{0};
