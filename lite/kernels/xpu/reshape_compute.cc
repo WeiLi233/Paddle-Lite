@@ -30,19 +30,6 @@ void ReshapeCompute<T>::Run() {
   auto output = param.output;
   auto output_dims = output->dims();
   
-  VLOG(3) << "MYDEBUG_X: " << param.my_debug_X_;
-  if(param.my_debug_X_ == "tmp_5") {
-    VLOG(3) << "shape_tensor_vct SIZE is: " << param.shape_tensor_vct.size();
-    VLOG(3) << "INPUT DIM " << x->dims();
-    VLOG(3) << "OUTPUT DIM " << output->dims();
-    for(size_t i=0; i<param.shape_tensor_vct.size(); i++) {
-      lite::Tensor tmp;
-      auto tmp_ptr = tmp.mutable_data<int32_t>(TARGET(kHost), param.shape_tensor_vct[i]->memory_size());
-      TargetWrapperXPU::MemcpySync(tmp_ptr, param.shape_tensor_vct[i]->raw_data(), param.shape_tensor_vct[i]->memory_size(), IoDirection::DtoH);
-      VLOG(3) << i << '\t' << tmp.data<int32_t>()[0];
-    }
-  }
-  
   if (output_dims.production() == 0) {
     output->set_target(TARGET(kXPU));
     return;

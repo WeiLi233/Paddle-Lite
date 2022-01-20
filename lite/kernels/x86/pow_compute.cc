@@ -20,7 +20,7 @@ namespace kernels {
 namespace x86 {
 
 void PowCompute::Run() {
-  LOG(INFO) << "PowCompute";
+  // LOG(INFO) << "PowCompute";
   auto& param = Param<operators::PowParam>();
   const float* x_data = param.X->data<float>();
   float* output_data = param.Out->mutable_data<float>();
