@@ -112,6 +112,7 @@ bool TileOp::InferShapeImpl() const {
 
 bool TileOp::AttachImpl(const cpp::OpDesc &opdesc, lite::Scope *scope) {
   param_.X = scope->FindMutableTensor(opdesc.Input("X").front());
+  param_.my_debug_X_ = opdesc.Input("X").front();
   if (opdesc.HasInput("RepeatTimes") && !opdesc.Input("RepeatTimes").empty()) {
     param_.RepeatTimes =
         scope->FindMutableTensor(opdesc.Input("RepeatTimes").front());
@@ -127,7 +128,7 @@ bool TileOp::AttachImpl(const cpp::OpDesc &opdesc, lite::Scope *scope) {
     param_.repeat_times = opdesc.GetAttr<std::vector<int>>("repeat_times");
   }
   param_.Out = scope->FindMutableTensor(opdesc.Output("Out").front());
-
+  param_.my_debug_Out_ = opdesc.Output("Out").front();
   return true;
 }
 

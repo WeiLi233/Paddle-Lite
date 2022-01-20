@@ -43,6 +43,9 @@ bool LookupTableV2OpLite::InferShapeImpl() const {
   out_dims.push_back(table_dims[1]);
   param_.Out->Resize(lite::DDim{out_dims});
   param_.Out->set_lod(param_.Ids->lod());
+  if(param_.my_debug_Out_ == "embedding_5.tmp_0") {
+    VLOG(3) << "LOOKUPTABLEV2DEBUG: " << param_.Out->dims();
+  }
   return true;
 }
 
@@ -55,7 +58,7 @@ bool LookupTableV2OpLite::AttachImpl(const cpp::OpDesc &op_desc,
   param_.W = scope->FindTensor(input);
   param_.Ids = scope->FindTensor(ids);
   param_.Out = scope->FindMutableTensor(out);
-
+  param_.my_debug_Out_ = out;
   param_.padding_idx = op_desc.GetAttr<int64_t>("padding_idx");
 
   return true;

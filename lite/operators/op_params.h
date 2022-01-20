@@ -260,6 +260,7 @@ struct SoftmaxParam : ParamBase {
 // For Reshape and Reshape2 Op
 struct ReshapeParam : ParamBase {
   std::string my_debug_X_;
+  std::string my_debug_Out_;
   std::vector<std::string> my_debug_ShapeTensor_;
   const lite::Tensor* x{};
   std::vector<const lite::Tensor*> shape_tensor_vct{};
@@ -583,6 +584,7 @@ struct FillAnyLikeParam : ParamBase {
 
 /// ----------------------- fill_constant operators ----------------------
 struct FillConstantParam : ParamBase {
+  std::string my_debug_ShapeTensor_;
   int dtype{static_cast<int>(VarDescAPI::VarDataType::FP32)};
   std::vector<int64_t> shape{};
   lite::Tensor* shape_tensor{nullptr};
@@ -937,6 +939,7 @@ struct BeamSearchDecodeParam : ParamBase {
 
 /// ----------------------- LookupTable operators ----------------------f
 struct LookupTableParam : ParamBase {
+  std::string my_debug_Out_;
   const lite::Tensor* W{nullptr};
   const lite::Tensor* Ids{nullptr};
   lite::Tensor* Out{nullptr};
@@ -2088,6 +2091,8 @@ struct StridedSliceParam : ParamBase {
 };
 
 struct TileParam : ParamBase {
+  std::string my_debug_X_;
+  std::string my_debug_Out_;
   lite::Tensor* X{};
   lite::Tensor* Out{};
   std::vector<int> repeat_times{};
