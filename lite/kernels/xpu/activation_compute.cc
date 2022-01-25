@@ -151,12 +151,25 @@ void PowCompute::Run() {
   xdnn::Activation_t act_type(xdnn::Activation_t::ACT_POW);
   act_type.pow_factor = param.factor;
 
+  //TODO
+  /*
   int r =
       xdnn::activation_forward(ctx.GetRawContext(),
                                act_type,
                                param.X->numel(),
                                param.X->data<float>(),
                                param.Out->mutable_data<float>(TARGET(kXPU)));
+  */
+ auto input_shape = param.X->dims().Vectorize();
+ std::vector<int> xshape(input_shape.begin(), input_shape.end());
+ int r = 
+      xdnn::broadcast_mul<float>(ctx.GetRawContext(),
+                                param.X->data<float>(),
+                                param.X->data<float>(),
+                                param.Out->mutable_data<float>(TARGET(kXPU)),
+                                xshape,
+                                xshape);
+
   CHECK_EQ(r, 0);
 }
 
@@ -329,11 +342,11 @@ REGISTER_LITE_KERNEL(
     .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU))})
     .Finalize();
 
-//REGISTER_LITE_KERNEL(
-//    pow, kXPU, kFloat, kNCHW, paddle::lite::kernels::xpu::PowCompute, def)
-//    .BindInput("X", {LiteType::GetTensorTy(TARGET(kXPU))})
-//    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU))})
-//    .Finalize();
+REGISTER_LITE_KERNEL(
+    pow, kXPU, kFloat, kNCHW, paddle::lite::kernels::xpu::PowCompute, def)
+    .BindInput("X", {LiteType::GetTensorTy(TARGET(kXPU))})
+    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU))})
+    .Finalize();
 
 REGISTER_LITE_KERNEL(
     log, kXPU, kFloat, kNCHW, paddle::lite::kernels::xpu::LogCompute, def)
