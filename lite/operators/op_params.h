@@ -1715,6 +1715,46 @@ struct XPUMultiEncoderParam : ParamBase {
   bool adaptive_seqlen{false};
 };
 
+struct FusionDecodingParam : ParamBase {
+  lite::Tensor* input_{};
+  lite::Tensor* mem_seq_len_{};
+  std::vector<const lite::Tensor*> cross_key_bias_;
+  std::vector<const lite::Tensor*> cross_key_weight_;
+  std::vector<const lite::Tensor*> cross_layernorm_bias_;
+  std::vector<const lite::Tensor*> cross_layernorm_weight_;
+  std::vector<const lite::Tensor*> cross_out_bias_;
+  std::vector<const lite::Tensor*> cross_out_weight_;
+  std::vector<const lite::Tensor*> cross_query_bias_;
+  std::vector<const lite::Tensor*> cross_query_weight_;
+  std::vector<const lite::Tensor*> cross_value_bias_;
+  std::vector<const lite::Tensor*> cross_value_weight_;
+  const lite::Tensor* decoder_layernorm_bias_{};
+  const lite::Tensor* docoder_layernorm_weight_{};
+  const lite::Tensor* emb_bias_{};
+  const lite::Tensor* emb_weight_{};
+  std::vector<const lite::Tensor*> ffn_inter_bias_;
+  std::vector<const lite::Tensor*> ffn_inter_weight_;
+  std::vector<const lite::Tensor*> ffn_layernorm_bias_;
+  std::vector<const lite::Tensor*> ffn_layernorm_weight_;
+  std::vector<const lite::Tensor*> ffn_out_bias_;
+  std::vector<const lite::Tensor*> ffn_out_weight_;
+  const lite::Tensor* position_enc_emb_{};
+  std::vector<const lite::Tensor*> self_key_bias_;
+  std::vector<const lite::Tensor*> self_key_weight_;
+  std::vector<const lite::Tensor*> self_layernorm_bias_;
+  std::vector<const lite::Tensor*> self_layernorm_weight_;
+  std::vector<const lite::Tensor*> self_out_bias_;
+  std::vector<const lite::Tensor*> self_out_weight_;
+  std::vector<const lite::Tensor*> self_query_bias_;
+  std::vector<const lite::Tensor*> self_query_weight_;
+  std::vector<const lite::Tensor*> self_value_bias_;
+  std::vector<const lite::Tensor*> self_value_weight_;
+  lite::Tensor* word_embedding_{};
+  lite::Tensor* output_ids_{};
+  lite::Tensor* parent_ids_{};
+
+};
+
 struct XPUEmbeddingWithEltwiseAddParam : ParamBase {
   std::vector<lite::Tensor*> Ids;
   std::vector<lite::Tensor*> Tables;
