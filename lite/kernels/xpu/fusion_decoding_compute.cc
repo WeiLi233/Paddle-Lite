@@ -26,6 +26,9 @@ namespace lite {
 namespace kernels {
 namespace xpu {
 
+static constexpr int MAX_K = 4;
+static constexpr int SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS = 128;
+
 template<typename T>
 struct DenseWeight{
     const T* kernel = nullptr;
@@ -69,8 +72,8 @@ public:
   const int32_t *memory_sequence_length = nullptr;
 
   // Used for force decoding.
-  const int32_t *trg_word = nullptr;
-  const int32_t *trg_length = nullptr;
+  /// const int32_t *trg_word = nullptr; // TODO: temporarily unseles
+  /// const int32_t *trg_length = nullptr;
 
   const T *position_encoding_table = nullptr;
 
@@ -157,21 +160,239 @@ static inline std::vector<const T*> prepare_weight(
   return xdnn_weight;
 }
 
+struct TensorParallelParam 
+{
+  int local_head_num_{0};
+  int local_hidden_units_{0};
+};
+
+template <typename T>
+class OpenDecoder {
+  baidu::xpu::api::Context *ctx_;
+  const DecoderInitParam<T> *param_;
+  TensorParallelParam t_parallel_param_;
+
+  int max_batch_size_ = -1;
+  int head_num_;
+  int size_per_head_;
+  int hidden_units_;
+  int memory_hidden_units_;
+  bool is_fuse_QKV_in_batched_gemm_;
+  bool is_fuse_QKV_in_normal_gemm_;
+  int normalization_before_;
+  /// ActivationType act_;
+
+  T *norm_from_tensor_buf_{}, *query_buf_{};
+  T *context_buf_{}, *masked_output_buf_{};
+  T *norm_masked_output_buf_{}, *cross_output_buf_{};
+  T *norm_cross_output_buf_{}, *ffn_inner_buf_{}, *ffn_out_buf_{};
+  T *key_buf_{}, *value_buf_{};
+
+  T **qkv_kernel_{};
+  T **qkv_input_{};
+  T **qkv_buf_{};
+
+
+public:
+  OpenDecoder(baidu::xpu::api::Context *ctx,
+              int head_num,
+              int size_per_head,
+              int memory_hidden_units,
+              bool is_fuse_QKV_in_normal_gemm = false,
+              bool normalization_before = true)
+      : ctx_(ctx),
+        head_num_(head_num),
+        size_per_head_(size_per_head),
+        memory_hidden_units_(memory_hidden_units),
+        is_fuse_QKV_in_normal_gemm_(is_fuse_QKV_in_normal_gemm),
+        normalization_before_(normalization_before) {
+    hidden_units_ = head_num_ * size_per_head_;
+    t_parallel_param_.local_head_num_ = head_num_;
+    t_parallel_param_.local_hidden_units_ = hidden_units_;
+  }
+  
+  inline void set_max_batch_size(int batch_size) {
+    max_batch_size_ = batch_size;
+  }
+
+  int getWorkspaceSize() {
+    return 13 * max_batch_size_ * hidden_units_ + sizeof(T *) * 9;
+  }
+
+  void initialize(const DecoderInitParam<T> &param, T *buf) {
+    param_ = &param;
+    const int buf_size = max_batch_size_ * hidden_units_;
+
+    norm_from_tensor_buf_ = buf;
+    ffn_out_buf_ = buf;
+    query_buf_ = buf + buf_size;  // store the query values (from_tensor * Q) in
+                                  // both masked and multi-head attention
+    key_buf_ = query_buf_ + buf_size;
+    value_buf_ = key_buf_ + buf_size;
+    context_buf_ = value_buf_ + buf_size;  // store the context result
+                                           // (softmax(qk)v) in both masked and
+                                           // multi-head attention
+
+    masked_output_buf_ = context_buf_ + buf_size;  // masked_attention_output
+    norm_masked_output_buf_ =
+        masked_output_buf_ + buf_size;  // norm(masked_attention_output)
+
+    cross_output_buf_ =
+        norm_masked_output_buf_ + buf_size;  // mutli-head attention_output
+    norm_cross_output_buf_ =
+        cross_output_buf_ + buf_size;  // norm(multi-head attention_output)
+    ffn_inner_buf_ =
+        norm_cross_output_buf_ + buf_size;  // 4 buf size to store inner product
+
+    qkv_kernel_ = (T **)(ffn_inner_buf_ + 4 * buf_size);
+    qkv_input_ = qkv_kernel_ + 3;
+    qkv_buf_ = qkv_input_ + 3;
+  }
+
+  void forward(const T *from_tensor,
+               const T *memory_tensor,
+               T *key_cache_,
+               T *value_cache_,
+               T *key_mem_cache_,
+               T *value_mem_cache_,
+               const int *memory_sequence_length,
+               T *decoder_output,
+               const int step,
+               const int decoder_max_seq_len,
+               const bool is_cross_attention,
+               const bool *finished = nullptr,
+               const int memory_max_seq_len = -1) {
+    
+    int xdnn_ret;
+    xdnn_ret = xdnn::layer_norm(ctx_,    
+                           from_tensor, 
+                           norm_from_tensor_buf_,
+                           max_batch_size_,
+                           t_parallel_param_.local_hidden_units_,
+                           1e-6f,
+                           param_->self_layernorm.gamma,
+                           param_->self_layernorm.beta,
+                           nullptr,
+                           nullptr);
+    CHECK_EQ(xdnn_ret, 0) << "Error in layernorm";
+    if (memory_max_seq_len == -1) {
+          masked_multi_head_attention(norm_from_tensor_buf_,
+                                      key_cache_,
+                                      value_cache_,
+                                      masked_output_buf_,
+                                      finished,
+                                      step,
+                                      decoder_max_seq_len);
+        } else {
+          CHECK(false) << "Not implemented.";
+        }
+  
+  }
+
+  void masked_multi_head_attention(const T *from_tensor,
+                                   T *key_cache_,
+                                   T *value_cache_,
+                                   T *decoder_output,
+                                   const bool *finished,
+                                   const int step,
+                                   const int max_seq_len) {
+    int m = max_batch_size_
+    int n = t_parallel_param_.local_hidden_units;
+    int k = hidden_units_;
+
+    int decoder_max_seq_len = max_seq_len;
+    T alpha = (T)1.0f, beta = (T)0.0f;
+    if (is_fuse_QKV_in_normal_gemm_ == true) {
+      cublasMM_cublasLtMM_wrapper_decoder(
+          param_.cublaslt_handle,
+          param_.cublas_handle,
+          CUBLAS_OP_N,
+          CUBLAS_OP_N,
+          3 * n,
+          m,
+          k,
+          &alpha,
+          param_.self_attention.query_weight.kernel,
+          AType_,
+          3 * n,
+          from_tensor,
+          BType_,
+          k,
+          &beta,
+          query_buf_,
+          CType_,
+          3 * n,
+          param_.stream,
+          cublasAlgoMap_,
+          cublas_workspace_);
+
+      fusedQKV_masked_attention_dispatch<T>(
+          query_buf_,
+          param_.self_attention.query_weight.bias,
+          key_cache_,
+          value_cache_,
+          context_buf_,
+          finished,
+          param_.request_batch_size,
+          l_parallel_param_.local_batch_size,
+          t_parallel_param_.local_head_num_,
+          size_per_head_,
+          step,
+          decoder_max_seq_len,
+          param_.stream);
+    } else {
+      CHECK(false) << "NOT IMPLEMENTEDD.";
+    }
+  
+  }
+};
 
 template<typename T>
 class DecodingBeamsearch {
 private:
   DecodingBeamsearchArguments args_;
-  baidu::xpu::api::Context* ctx_;
-  bool is_fuse_topk_softMax_;
-  bool keep_alive_beam_;
+  baidu::xpu::api::Context* ctx_{};
+  bool is_fuse_topk_softMax_{};
+  bool keep_alive_beam_{};
 
-  T **K_cache_;
-  T **V_cache_;
-  T **K_mem_cache_;
-  T **V_mem_cache_;
-  T *from_tensor_[2];
-  T *decoder_buf_;
+  std::unique_ptr<OpenDecoder<T>> decoder_{};
+  T **K_cache_{};
+  T **V_cache_{};
+  T **K_mem_cache_{};
+  T **V_mem_cache_{};
+  T *from_tensor_[2]{};
+  T *decoder_buf_{};
+
+  // Prefix LM
+  /// T *trans_out_buf_;
+  /// T *lm_normed_result_buf_;
+
+  T *decoder_normed_result_buf_{};
+  T *embedding_buf_{};
+  float *logits_buf_{};
+  float *cum_log_buf_{};
+  int *word_ids_buf_{};
+  int *parent_ids_buf_{};
+  bool *finished_buf_{};
+  bool *alive_finished_buf_{};
+
+  /// void *buf_{};
+  lite::Tensor buf_tensor_;
+  void *buf_{};
+  int *finished_count_buf_{};
+  bool *h_finished_buf_{};
+  int *h_trg_length_{};
+  float *temp_storage_{};
+
+
+  void *topK_kernel_workspace = nullptr;
+  size_t topk_workspace_size_ = 0;
+  /// void *cublas_workspace_ = nullptr;
+
+  T *padded_embedding_kernel{};
+  T *padded_embedding_bias{};
+  T *tmp_logits_buf_{};
+
 
 public:
   DecodingBeamsearch& operator=(const DecodingBeamsearch& ) = delete;
@@ -190,10 +411,10 @@ public:
                      const int32_t memory_max_seq_len,
                      const int32_t start_id,
                      const int32_t end_id,
-                     const float beam_search_diversity_rate = -0.0f,
-                     const bool is_fuse_topk_softMax = false,
-                     const bool is_fuse_qkv = false,
-                     const bool keep_alive_beam = false,
+                     const float beam_search_diversity_rate = -0.0f, // 0
+                     const bool is_fuse_topk_softMax = false, // true
+                     const bool is_fuse_qkv = false, // true
+                     const bool keep_alive_beam = false, // true
                      const float alpha = 0.6,
                      const bool normalization_before = true,
                      const int32_t pos_offset = 0,
@@ -217,6 +438,17 @@ public:
     args_.start_id_ = start_id;
     args_.end_id_ = end_id;
     args_.beam_search_diversity_rate_ = beam_search_diversity_rate;
+    VLOG(2) << "DECODINGBEAMSEARCH INFO: \n" 
+            << "batch_size\t" << batch_size << '\n'
+            << "beam_width\t" << beam_width << '\n'
+            << "seq_len\t" << seq_len << '\n'
+            << "head_num\t" << head_num << '\n'
+            << "size_per_head\t" << size_per_head << '\n'
+            << "vocab_size\t" << vocab_size << '\n'
+            << "decoder_layers\t" << decoder_layers << '\n'
+            << "memory_hidden_units\t" << memory_hidden_units << '\n'
+            << "momory_max_seq_len\t" << memory_max_seq_len << '\n'
+            << "STARTID:\t" << args_.start_id_ << '\n';
     //if (args_.beam_width_ > 16 || args_.beam_width_ > MAX_K)
     //  CHECK(false) << "Not Suported!";
     if (std::is_same<T, float>::value)
@@ -239,58 +471,82 @@ public:
                                         ? beam_width * 2
                                         : finished_candidate_num;
     args_.early_stopping_ = early_stopping;
+
+    K_cache_ = new T *[2];
+    V_cache_ = new T *[2];
+
+    K_mem_cache_ = new T *[args_.decoder_layers_];
+    V_mem_cache_ = new T *[args_.decoder_layers_];
+
     // TODO: OpenDecoder
+    decoder_ = std::unique_ptr<OpenDecoder<T>>(new OpenDecoder<T>(ctx,
+                                                        head_num,
+                                                        size_per_head,
+                                                        memory_hidden_units,
+                                                        is_fuse_qkv,
+                                                        normalization_before));
+    decoder_->set_max_batch_size(batch_size * beam_width);
 
     size_t from_tensor_size =
-        args_.batch_size_ * args_.beam_width_ * args_.hidden_units_;  // type T
-    /// TODO size_t decoder_workspace_size = decoder_->getWorkspaceSize();     // type T
+        args_.batch_size_ * args_.beam_width_ * args_.hidden_units_;  // type T 
+        // DEBUG: 8 * 4 * 1024 = 32768
+    size_t decoder_workspace_size = decoder_->getWorkspaceSize();
     size_t decoder_normed_result_buffer_size =
         args_.batch_size_ * args_.beam_width_ * args_.hidden_units_;  // type T
+        // DEBUG: 32768
     size_t cache_size = (prefix_lm)
                             ? (args_.batch_size_ * args_.beam_width_ *
                                (args_.seq_len_ + args_.memory_max_seq_len_) *
                                args_.hidden_units_)
                             : (args_.batch_size_ * args_.beam_width_ *
                                args_.seq_len_ * args_.hidden_units_);  // type T
+        // 8 * 4 * 1024 * 39 = 1277952
     size_t mem_cache_size =
         (prefix_lm) ? 0 : (args_.batch_size_ * args_.beam_width_ *
                            memory_max_seq_len * args_.hidden_units_);  // type T
-
+        // 8 * 4 * 256 * 1024 = 8388608
     size_t logits_buf_size = args_.batch_size_ * args_.beam_width_ *
                              args_.vocab_size_padded_;  // type float
+        // 8 * 4 * 38512 = 1232384
     size_t cum_log_buf_size =
         args_.batch_size_ * args_.beam_width_;  // type float
+        // 32
     size_t word_ids_buf_size =
         args_.batch_size_ * args_.beam_width_;  // type int
+        // 32
     size_t parent_ids_buf_size =
         keep_alive_beam_ ? word_ids_buf_size : 0;  // type int
+        // 32
     size_t finished_buf_size =
         args_.batch_size_ * args_.beam_width_;  // type bool
+        // 32
     size_t alive_finished_buf_size = keep_alive_beam_ ? finished_buf_size : 0;
+        // 32
     size_t finished_count_size = (size_t)(ceil(1 / 32.)) * 32;  // type int
-    /*
+        // 32
+    /// VLOG(2) << "DDDEBUG " << from_tensor_size << '\t' << decoder_normed_result_buffer_size << '\t' << cache_size << '\t' << mem_cache_size << '\t' << finished_count_size;
+    
     size_t storage_size_per_beam =
-        2 * args_.beam_width_ +
-        SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS * (2 * MAX_K + 2);
-    args_.temp_storage_size_ = args_.batch_size_ * args_.beam_width_ *
-                               storage_size_per_beam;  // type float
+        2 * args_.beam_width_ + SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS * (2 * MAX_K + 2);
+    args_.temp_storage_size_ = 
+        args_.batch_size_ * args_.beam_width_ * storage_size_per_beam;  // type float
     args_.temp_storage_size_ = (size_t)(
         ceil(args_.batch_size_ * args_.beam_width_ * args_.beam_width_ / 4.) *
             4 * 2 +
         ceil(args_.batch_size_ * args_.beam_width_ *
              SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS * (2 * MAX_K + 2) / 4.) *
             4);
-    */
+
     size_t padded_embedding_kernel_size =
         args_.hidden_units_ * args_.vocab_size_padded_;
     size_t padded_embedding_bias_size = args_.vocab_size_padded_;
-    if (args_.vocab_size_padded_ == args_.vocab_size_)) {
+    if (args_.vocab_size_padded_ == args_.vocab_size_) {
       padded_embedding_kernel_size = 0;
       padded_embedding_bias_size = 0;
     }
 
 
-        // When using separated alive and finish beam queues, some buffers size need
+    // When using separated alive and finish beam queues, some buffers size need
     // to be doubled to restore beam search intermedia results of both alive and
     // finish beams.
     if (keep_alive_beam_ == true) {
@@ -300,8 +556,7 @@ public:
       // Double the size of topk_tmp_id_buf, topk_tmp_val_buf, since we need
       // select the top 2*beam_width.
       args_.temp_storage_size_ +=
-          ceil(args_.batch_size_ * args_.beam_width_ * args_.beam_width_ / 4.) *
-          4 * 2;
+          ceil(args_.batch_size_ * args_.beam_width_ * args_.beam_width_ / 4.) * 4 * 2;
     }
 
     // prevent memory misalinged address
@@ -313,42 +568,229 @@ public:
     alive_finished_buf_size =
         (size_t)(ceil(alive_finished_buf_size / 32.)) * 32;
     const size_t tmp_logits_buf_size = logits_buf_size;
+    
+    // TODO: omit topK_kernel_laucher
+    { 
+      // implement topK_update_kernelLauncher()
+      const int max_block_per_beam = 8;
+      int temp_log_probs_buf_size = batch_size * beam_width * vocab_size;  // type float
+      // select top beam_width*2 for topk_tmp_id_buf and topk_tmp_val_buf
+      int topk_tmp_ids_buf_size = batch_size * beam_width * beam_width * 2 * max_block_per_beam;  // type int
+      int topk_tmp_val_buf_size = batch_size * beam_width * beam_width * 2 * max_block_per_beam;  // type float
+      // // to save tmp output_cum_log_probs results of the alive beams
+      // topk_tmp_val_buf_size += batch_size * beam_width;
 
-    // get workspace size of topk kernel
-    if (keep_alive_beam_ == true) {
-      topK_update_kernelLauncher(topK_kernel_workspace,
-                                 topk_workspace_size_,
-                                 logits_buf_,
-                                 finished_buf_,
-                                 alive_finished_buf_,
-                                 nullptr,
-                                 word_ids_buf_,
-                                 parent_ids_buf_,
-                                 nullptr,
-                                 nullptr,
-                                 cum_log_buf_,
-                                 0,
-                                 args_,
-                                 0);
-    } else {
-      topK_kernelLauncher(topK_kernel_workspace,
-                          topk_workspace_size_,
-                          logits_buf_,
-                          word_ids_buf_,
-                          finished_buf_,
-                          args_,
-                          0);
+      // prevent memory misalinged address
+      temp_log_probs_buf_size = (int)(ceil(temp_log_probs_buf_size / 4.)) * 4;
+      topk_tmp_ids_buf_size = (int)(ceil(topk_tmp_ids_buf_size / 4.)) * 4;
+      topk_tmp_val_buf_size = (int)(ceil(topk_tmp_val_buf_size / 4.)) * 4;
+
+      topk_workspace_size_ = sizeof(float) * temp_log_probs_buf_size +
+                              sizeof(int) * topk_tmp_ids_buf_size +
+                              sizeof(float) * topk_tmp_val_buf_size;
     }
+
+    size_t lm_head_buffer_size = (prefix_lm)
+                          ? decoder_normed_result_buffer_size
+                          : decoder_normed_result_buffer_size * 3;
+
+
+    size_t datatype_buf_size =
+        from_tensor_size * 2 + decoder_workspace_size +
+        (cache_size * 4 + mem_cache_size * 2) * args_.decoder_layers_ +
+        lm_head_buffer_size;
+
+    buf_ = buf_tensor_.mutable_data(TARGET(kXPU), 
+                sizeof(T) * datatype_buf_size + 
+                sizeof(float) * (logits_buf_size + cum_log_buf_size) + 
+                sizeof(T) * tmp_logits_buf_size + 
+                sizeof(T) * padded_embedding_kernel_size + 
+                sizeof(float) * padded_embedding_bias_size + 
+                sizeof(int32_t) * (word_ids_buf_size + parent_ids_buf_size) + 
+                sizeof(bool) * (finished_buf_size + alive_finished_buf_size) + 
+                topk_workspace_size_ + 
+                sizeof(float) * args_.temp_storage_size_ + 
+                sizeof(int32_t) * finished_count_size); // TODO: not accurate!
+      
+    from_tensor_[0] = (T*)(buf_);
+    from_tensor_[1] = (T*)(from_tensor_[0] + from_tensor_size);
+
+    for (int i = 0; i < args_.decoder_layers_; ++i) {
+      K_mem_cache_[i] = from_tensor_[1] + from_tensor_size + i * mem_cache_size * 2;
+      V_mem_cache_[i] = from_tensor_[1] + from_tensor_size + i * mem_cache_size * 2 + mem_cache_size;
+    }
+    if (args_.beam_width_ > 1) {
+      /* We use two-way buffer since we have to update KV buf at the end of each
+       * step. */
+      K_cache_[0] = V_mem_cache_[decoder_layers - 1] + mem_cache_size +
+                    0 * cache_size * args_.decoder_layers_;
+      K_cache_[1] = V_mem_cache_[decoder_layers - 1] + mem_cache_size +
+                    1 * cache_size * args_.decoder_layers_;
+      V_cache_[0] = V_mem_cache_[decoder_layers - 1] + mem_cache_size +
+                    2 * cache_size * args_.decoder_layers_;
+      V_cache_[1] = V_mem_cache_[decoder_layers - 1] + mem_cache_size +
+                    3 * cache_size * args_.decoder_layers_;
+    } else {
+      // if beam width is 1, we only need one buffer
+      CHECK(false) << "not implemented.";
+    }
+
+    decoder_buf_ = V_cache_[1] + cache_size * args_.decoder_layers_;
+    
+    if (prefix_lm) {
+        CHECK(false) << "not implemented!";
+    } else {
+      decoder_normed_result_buf_ = (decoder_buf_ + decoder_workspace_size);
+      // Used for post-norm.
+      embedding_buf_ = (decoder_buf_ + decoder_workspace_size);
+    }
+
+    logits_buf_ = (float *)(decoder_normed_result_buf_ +
+                            decoder_normed_result_buffer_size);
+    cum_log_buf_ = (float *)(logits_buf_ + logits_buf_size);
+    word_ids_buf_ = (int *)(cum_log_buf_ + cum_log_buf_size);
+    parent_ids_buf_ = (int *)(word_ids_buf_ + word_ids_buf_size);
+    finished_buf_ = (bool *)(parent_ids_buf_ + parent_ids_buf_size);
+    alive_finished_buf_ = (bool *)(finished_buf_ + finished_buf_size);
+    temp_storage_ = (float *)(alive_finished_buf_ + alive_finished_buf_size);
+    finished_count_buf_ = (int *)(temp_storage_ + args_.temp_storage_size_);
+    topK_kernel_workspace = (void *)(finished_count_buf_ + finished_count_size);
+    padded_embedding_kernel =
+        (T *)((char *)topK_kernel_workspace + topk_workspace_size_);
+    padded_embedding_bias =
+        (T *)(padded_embedding_kernel + padded_embedding_kernel_size);
+    tmp_logits_buf_ =
+        (T *)(padded_embedding_bias + padded_embedding_bias_size);
+
+    h_finished_buf_ = new bool[finished_buf_size];
+    h_trg_length_ = new int[args_.batch_size_];
+
   }
   
-  virtual ~DecodingBeamsearch() {
+  void forward(const vector<DecoderInitParam<T>>& param, DecodingInitParam<T>& decoding_params) {
+    const int m = args_.batch_size_ * args_.beam_width_;
+    // const int k = args_.hidden_units_;
+    // const int n = args_.vocab_size_padded_;
+    // const T *embedding_kernel_ptr = nullptr;
+    // const T *embedding_bias_ptr = nullptr;
+    // int min_trg_len = 0;
+    // int max_trg_len = 0;
+
+    // call init_kernelLauncher_v2()
+    int xdnn_ret;
+    xdnn_ret = xdnn::constant<bool>(ctx_, 
+                            finished_buf_, 
+                            args_.batch_size_ * args_.beam_width_ * 2, 
+                            false);
+    CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 1!.";
+    xdnn_ret = xdnn::constant<bool>(ctx_, 
+                            alive_finished_buf_, 
+                            args_.batch_size_ * args_.beam_width_, 
+                            false);
+    CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 2!.";
+    xdnn_ret = xdnn::constant<int32_t>(ctx_, 
+                            decoding_params.sequence_length, 
+                            args_.batch_size_ * args_.beam_width_ * 2, 
+                            0);
+    CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 3!.";
+    xdnn_ret = xdnn::constant<int32_t>(ctx_, 
+                            word_ids_buf_, 
+                            args_.batch_size_ * args_.beam_width_, 
+                            args_.start_id_);
+    CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 3!.";
+    xdnn_ret = xdnn::constant<float>(ctx_, 
+                            cum_log_buf_, 
+                            args_.batch_size_ * args_.beam_width_ * 2, 
+                            -1e20f); // TODO
+    CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 4!.";
+    // end init_kernelLauncher_v2()
+
     /*
+    int cache_size =
+        (args_.prefix_lm_) ? 
+            (m * (args_.seq_len_ + args_.memory_max_seq_len_) * args_.hidden_units_)
+            : (m * args_.seq_len_ * args_.hidden_units_);  // type T
+            // 4 * 8 * 256 * 1024 = 8388608
+    */
+
+    for (uint step = 1; step <= args_.seq_len_; ++step) {
+      // we use two-way buffer
+      /// int kv_cache_id = step & 0x1;
+
+      // call embedding_lookup_sine_position_encoding_kernel_launcher()
+      xdnn_ret = xdnn::embedding<float, int32_t>(
+                                ctx_, /* context */
+                                decoding_params.embedding_table,
+                                word_ids_buf_,
+                                from_tensor_[0],
+                                args_.vocab_size_ ,
+                                args_.hidden_units_,
+                                m,
+                                0);
+      CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 5!.";                            
+      const float scale = std::sqrt(args_.hidden_units_);
+      xdnn_ret = xdnn::scale<float>(
+                        ctx_,
+                        from_tensor_[0],
+                        from_tensor_[0],
+                        m * args_.hidden_units_,
+                        0.0f, /* bias_after_scale */
+                        scale,            /* alpha */
+                        0.0f);            /* beta */
+      CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 6!.";
+      xdnn_ret = xdnn::broadcast_add<float>(ctx_,
+                    from_tensor_[0],
+                    decoding_params.position_encoding_table 
+                    + (step - 1 + args_.pos_offset_) * args_.hidden_units_,
+                    from_tensor_[0],
+                    {m, static_cast<int32_t>(args_.hidden_units_)},
+                    {1, static_cast<int32_t>(args_.hidden_units_)});
+      CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 7!.";
+      /*
+      vector<float> debug_cpu(256);
+      vector<int32_t> word_cpu(32);
+      vector<float> pos_cpu(32);
+      TargetWrapperXPU::MemcpySync(
+            debug_cpu.data(), from_tensor_[0], 256*sizeof(float), IoDirection::DtoH);
+      TargetWrapperXPU::MemcpySync(
+            word_cpu.data(), word_ids_buf_, 32*sizeof(int32_t), IoDirection::DtoH);
+      TargetWrapperXPU::MemcpySync(
+            pos_cpu.data(), decoding_params.position_encoding_table, 32*sizeof(float), IoDirection::DtoH);
+            */
+      // end embedding_lookup_sine_position_encoding_kernel_launcher()
+
+      int from_id, out_id;
+      for (int layer = 0; layer < args_.decoder_layers_; ++layer) {
+        /*
+          For the first layer (layer-0), from_id  is 0. We also stored the
+          embedding lookup
+          result in from_tensor_[0]
+        */
+        from_id = layer & 0x1;
+        out_id = 1 - from_id;
+
+        /*
+          We use one decoder_ object to process multiple decoder layers.
+
+          At the beginning of each decoder layer, we initialize the decoder
+          object
+          with corresponding weights and decoder_buf_.
+          The decoder_buf_ is reused.
+        */
+        decoder_->initialize(param[layer], decoder_buf_);
+
+      }
+    }
+  }
+
+  virtual ~DecodingBeamsearch() {
     delete[] K_cache_;
     delete[] V_cache_;
     delete[] K_mem_cache_;
     delete[] V_mem_cache_;
     delete[] h_finished_buf_;
     delete[] h_trg_length_;
+    /*
     delete decoder_;
     allocator_.free(buf_);
     */
@@ -448,7 +890,9 @@ static void DecodingKernel(
   const int32_t memory_max_seq_len = input_dims[1];
   const int32_t memory_hidden_dim = input_dims[2];
   const int vocab_size = word_embedding->dims()[0];
-  
+  VLOG(2) << "VOCAB SIZE IS " << vocab_size;
+  VLOG(2) << "SEQUENCE LEN IS " << sequence_length->dims();
+  VLOG(2) << "EMBEDDING DIM " << word_embedding->dims();
   DecodingInitParam<float> decoding_params;
   decoding_params.output_ids = output_ids->mutable_data<int32_t>(
                                   TARGET(kXPU), output_ids->memory_size());
@@ -463,6 +907,8 @@ static void DecodingKernel(
   auto q_weight_dims = self_q_weight[0]->dims();
   auto k_weight_dims = self_k_weight[0]->dims();
   bool fuse_qkv = (q_weight_dims[1] == k_weight_dims[1]) ? false : true;
+  VLOG(2) << "q_weight_dim: " << q_weight_dims;
+  VLOG(2) << "k_weight_dim: " << k_weight_dims;
 
   for(int32_t i=0; i<num_layer; i++) {
     if (decoding_strategy == "beam_search" || decoding_strategy == "beam_search_v2") {
@@ -527,8 +973,9 @@ static void DecodingKernel(
 
   decoding_params.position_encoding_table = positional_embedding_weight->data<float>();
 
+  std::unique_ptr<DecodingBeamsearch<float>> decoding_beam_search;
   if(decoding_strategy == "beam_search_v2") {
-    auto decoding_beam_search = std::unique_ptr<DecodingBeamsearch<float>>(
+    decoding_beam_search = std::unique_ptr<DecodingBeamsearch<float>>(
       new DecodingBeamsearch<float>(
           ctx,
           batch_size,
@@ -548,10 +995,11 @@ static void DecodingKernel(
           true,   // keep_alive_beam
           alpha));
   } else {
-    CHECK(false) << "not supported now";
+    CHECK(false) << "\"decoding_strategy\" only support \"beam_search_v2\", assigned value is "
+                  << decoding_strategy;
   }
   
-
+  decoding_beam_search->forward(params, decoding_params);
 
 
   return;
@@ -597,7 +1045,7 @@ void FusionDecodingCompute::RunDecodingForward() {
 
   int32_t batch_size = param.input_->dims()[0];
   int32_t max_out_len = param.rel_len_ ?  param.max_len_ + param.input_->dims()[1] : param.max_len_;
-
+  // VLOG(2) << "PARAM MAX_LEN " << param.max_len_;
   std::vector<int64_t> output_dims;
   std::vector<int64_t> parent_ids_dims;
   std::vector<int64_t> sequence_length_dims({batch_size});
