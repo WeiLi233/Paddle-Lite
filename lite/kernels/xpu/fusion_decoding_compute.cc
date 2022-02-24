@@ -283,10 +283,9 @@ public:
                                       finished,
                                       step,
                                       decoder_max_seq_len);
-        } else {
-          CHECK(false) << "Not implemented.";
-        }
-  
+    } else {
+      CHECK(false) << "Not implemented.";
+    }
   }
 
   void masked_multi_head_attention(const T *from_tensor,
@@ -296,13 +295,119 @@ public:
                                    const bool *finished,
                                    const int step,
                                    const int max_seq_len) {
-    int m = max_batch_size_
-    int n = t_parallel_param_.local_hidden_units;
-    int k = hidden_units_;
-
+    
+    int m = max_batch_size_;
+    int n = t_parallel_param_.local_hidden_units_;
+    // int k = hidden_units_;
+    /*
     int decoder_max_seq_len = max_seq_len;
     T alpha = (T)1.0f, beta = (T)0.0f;
+    */
+    // VLOG(2) << "DDDEBUG: " << m << '\t' << max_seq_len << '\t' << n;
+    // 32, 256 1024
+    /*
+    XPUScratchPadGuard weight_max_guard;
+    XPUScratchPadGuard input_max_guard;
+    XPUScratchPadGuard output_max_xpu_guard;
+    const int maxptr_size = xdnn::get_max_ptr_size(ctx_.GetRawContext());
+    input_max_xpu_guard = TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
+    weight_max_xpu_guard = TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
+    output_max_xpu_guard = TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
+    float* input_max_data = reinterpret_cast<float*>(input_max_xpu_guard_->addr_);
+    float* weight_max_data = reinterpret_cast<float*>(weight_max_xpu_guard_->addr_);
+    float* output_max_data = reinterpret_cast<float*>(output_max_xpu_guard_->addr_);
+
+    int xdnn_ret;
+    xdnn_ret = xdnn::findmax<float>(ctx_, from_tensor, m * n, input_max_data);
+    xdnn_ret = xdnn::findmax<float>(
+      ctx_, param_->self_attention.query_weight.kernel, n * n * 3, weight_max_data);
+    CHECK_EQ(xdnn_ret, 0) << "FIND MAX ERROR.";
+    */
+    int xdnn_ret;
     if (is_fuse_QKV_in_normal_gemm_ == true) {
+      xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+      ctx_, /* context */
+      from_tensor,          /* x */
+      param_->self_attention.query_weight.kernel,
+      decoder_output,                      /* y */
+      m,                  /* m */
+      n * 3,                        /* n */
+      n,                        /* k */
+      false,                       /* x_trans */
+      false,                        /* w_trans */
+      nullptr,              /* x_max */
+      nullptr,             /* w_max */
+      nullptr,             /* y_max */
+      n,                        /* ldx */
+      n * 3,                        /* ldw */
+      n * 3,                        /* ldy */
+      1.0f,                        /* alpha */
+      0.0f,                        /* beta */
+      param_->self_attention.query_weight.bias, /* bias */
+      xdnn::Activation_t::LINEAR); /* act_type */
+      CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
+      /*
+      if(step == 1) {
+        const int dbg_len = m*3*n;
+        vector<float> debug_cpu(dbg_len); // 32 * 39 * 1024 * 3 = 3833856
+        vector<float> from_tensor_cpu(n*n);
+        TargetWrapperXPU::MemcpySync(
+            debug_cpu.data(), decoder_output, dbg_len*sizeof(float), IoDirection::DtoH); 
+                TargetWrapperXPU::MemcpySync(
+            from_tensor_cpu.data(), from_tensor, m*n*sizeof(float), IoDirection::DtoH); 
+        std::cout << "MATMUL" << std::endl;
+        for(int x=0; x<dbg_len; x+=1000) {
+          std::cout << debug_cpu[x] << ' ';
+        }
+        std::cout << std::endl;
+      }
+      */
+      xdnn::QKVAttnParam qkv_attn_param(m, 
+                                      1, 
+                                      head_num_,
+                                      size_per_head_,
+                                      {m,1,1,1},
+                                      xdnn::Activation_t::RELU,
+                                      -1,
+                                      true);
+        lite::Tensor qk_tensor;
+        lite::Tensor qkv_tensor;
+        qk_tensor.Resize({m,hidden_units_, 1, 1});
+        qkv_tensor.Resize({m,hidden_units_});
+        // qk_tensor.mutable_data<float>(TARGET(kXPU), qk_tensor.dims().production() * sizeof(float));
+        xdnn_ret = xdnn::qk_attention<float, float, float, int16_t>(
+          ctx_,
+          decoder_output,
+          decoder_output + hidden_units_,
+          qk_tensor.mutable_data<float>(TARGET(kXPU), qk_tensor.dims().production() * sizeof(float)),
+          nullptr,
+          nullptr,
+          nullptr,
+          qkv_attn_param,
+          nullptr);
+        xdnn_ret = xdnn::qk_v_attention<float, float, float, int16_t>(
+          ctx_,
+          qk_tensor.data<float>(),
+          decoder_output + hidden_units_ * 2,
+          qkv_tensor.mutable_data<float>(TARGET(kXPU), qkv_tensor.dims().production() * sizeof(float)),
+          nullptr,
+          nullptr,
+          nullptr,
+          qkv_attn_param);
+        
+        if(step == 1) {
+          const int dbg_len = m*hidden_units_;
+          vector<float> debug_cpu(dbg_len); // 32 * 39 * 1024 * 3 = 3833856
+          TargetWrapperXPU::MemcpySync(
+              debug_cpu.data(), qkv_tensor.data<float>(), dbg_len*sizeof(float), IoDirection::DtoH); 
+
+          std::cout << "res" << std::endl;
+          for(int x=0; x<dbg_len; x+=600) {
+            std::cout << debug_cpu[x] << ' ';
+          }
+          std::cout << std::endl;
+        }
+      /*
       cublasMM_cublasLtMM_wrapper_decoder(
           param_.cublaslt_handle,
           param_.cublas_handle,
@@ -340,6 +445,7 @@ public:
           step,
           decoder_max_seq_len,
           param_.stream);
+          */
     } else {
       CHECK(false) << "NOT IMPLEMENTEDD.";
     }
@@ -664,7 +770,6 @@ public:
 
     h_finished_buf_ = new bool[finished_buf_size];
     h_trg_length_ = new int[args_.batch_size_];
-
   }
   
   void forward(const vector<DecoderInitParam<T>>& param, DecodingInitParam<T>& decoding_params) {
@@ -704,19 +809,22 @@ public:
                             -1e20f); // TODO
     CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 4!.";
     // end init_kernelLauncher_v2()
-
-    /*
     int cache_size =
         (args_.prefix_lm_) ? 
             (m * (args_.seq_len_ + args_.memory_max_seq_len_) * args_.hidden_units_)
             : (m * args_.seq_len_ * args_.hidden_units_);  // type T
             // 4 * 8 * 256 * 1024 = 8388608
-    */
 
     for (uint step = 1; step <= args_.seq_len_; ++step) {
       // we use two-way buffer
-      /// int kv_cache_id = step & 0x1;
-
+      int kv_cache_id = step & 0x1;
+      // for debugging
+      /*
+      if(step == 2) {
+        vector<int32_t> tmp_word_cpu{9816, 14385, 7080, 1642, 44, 56, 1702, 138, 8250, 56, 138, 6406, 24981, 6732, 126, 56, 21, 56, 318, 96, 56, 96, 213, 477, 96, 56, 617, 126, 120, 138, 96, 56};
+        TargetWrapperXPU::MemcpySync(
+            word_ids_buf_, tmp_word_cpu.data(), tmp_word_cpu.size()*sizeof(int32_t), IoDirection::HtoD);
+      }*/
       // call embedding_lookup_sine_position_encoding_kernel_launcher()
       xdnn_ret = xdnn::embedding<float, int32_t>(
                                 ctx_, /* context */
@@ -756,7 +864,17 @@ public:
             word_cpu.data(), word_ids_buf_, 32*sizeof(int32_t), IoDirection::DtoH);
       TargetWrapperXPU::MemcpySync(
             pos_cpu.data(), decoding_params.position_encoding_table, 32*sizeof(float), IoDirection::DtoH);
-            */
+      if(step == 2) {
+          vector<float> debug_cpu(256);
+          TargetWrapperXPU::MemcpySync(
+            debug_cpu.data(), from_tensor_[0], 256*sizeof(float), IoDirection::DtoH); 
+          std::cout << "STEP2 DEBUG" << std::endl;
+          for(int x=0; x<32; x++) {
+            std::cout << debug_cpu[x] << ' ';
+          }
+          std::cout << std::endl;
+      }
+      */
       // end embedding_lookup_sine_position_encoding_kernel_launcher()
 
       int from_id, out_id;
@@ -778,7 +896,24 @@ public:
           The decoder_buf_ is reused.
         */
         decoder_->initialize(param[layer], decoder_buf_);
-
+    
+        if (args_.prefix_lm_) {
+          CHECK(false) << "Not IMPLEMENTED!";
+        } else {
+          decoder_->forward(
+              from_tensor_[from_id],
+              decoding_params.memory_tensor,
+              K_cache_[kv_cache_id] + layer * cache_size,
+              V_cache_[kv_cache_id] + layer * cache_size,
+              K_mem_cache_[layer],
+              V_mem_cache_[layer],
+              decoding_params.memory_sequence_length,
+              from_tensor_[out_id],
+              step,
+              args_.seq_len_,
+              true, // is_cross_attention
+              keep_alive_beam_ ? alive_finished_buf_ : finished_buf_);
+        }
       }
     }
   }
@@ -859,7 +994,12 @@ static void DecodingKernel(
   ifs.read(reinterpret_cast<char*>(cpu_input.data()), 32*39*1024*sizeof(float));
   ifs.read(reinterpret_cast<char*>(cpu_mem_seq_len.data()), 32*sizeof(int32_t));
   ifs.close();
-
+  /*
+  VLOG(2) << "MEM SEQ";
+  for(auto v: cpu_mem_seq_len) {
+    VLOG(2) << v;
+  }
+  */
   TargetWrapperXPU::MemcpySync(
             const_cast<lite::Tensor*>(input)->mutable_data(TARGET(kXPU), input->memory_size()), 
             cpu_input.data(), 
@@ -925,7 +1065,9 @@ static void DecodingKernel(
     params[i].self_layernorm.beta = self_ln_bias[i]->data<float>();
     // query
     params[i].self_attention.query_weight.kernel = self_q_weight[i]->data<float>();
+    // VLOG(2) << "CNT i: " << i << " dim: " <<  self_q_weight[i]->dims();
     params[i].self_attention.query_weight.bias = self_q_bias[i]->data<float>();
+    // VLOG(2) << "CNT bias i: " << i << " dim: " <<  self_q_bias[i]->dims();
     // key
     params[i].self_attention.key_weight.kernel = self_k_weight[i]->data<float>();
     params[i].self_attention.key_weight.bias = self_k_bias[i]->data<float>();
@@ -1006,6 +1148,14 @@ static void DecodingKernel(
 }
 
 void FusionDecodingCompute::PrepareForRun() {
+  auto& ctx = this->ctx_->As<XPUContext>();
+  int maxptr_size = xdnn::get_max_ptr_size(ctx.GetRawContext());
+  input_max_xpu_guard_ =
+      TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
+  weight_max_xpu_guard_ =
+      TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
+  output_max_xpu_guard_ =
+      TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
   /*
   auto& param = this->Param<param_t>();
   arg_cross_key_bias_ = prepare_weight<float>(param.cross_key_bias_);
@@ -1035,6 +1185,7 @@ void FusionDecodingCompute::PrepareForRun() {
   arg_self_value_bias_ = prepare_weight<float>(param.self_value_bias_);
   arg_self_value_weight_ = prepare_weight<float>(param.self_value_weight_);
   */
+
   return;
 }
 

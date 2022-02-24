@@ -67,8 +67,9 @@ class FusionDecodingCompute
     std::vector<const float*> arg_self_value_bias_;
     std::vector<const float*> arg_self_value_weight_;
     */
-    XPUScratchPadGuard weight_max_guard_;
-    XPUScratchPadGuard input_max_guard_;
+    XPUScratchPadGuard input_max_xpu_guard_;
+    XPUScratchPadGuard weight_max_xpu_guard_;
+    XPUScratchPadGuard output_max_xpu_guard_;
 };
 
 }  // namespace xpu
