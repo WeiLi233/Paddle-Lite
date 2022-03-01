@@ -15,6 +15,7 @@
 #include <vector>
 #include <fstream>
 #include <memory>
+#include <algorithm>
 #include "lite/kernels/xpu/fusion_decoding_compute.h"
 #include "lite/backends/xpu/xpu_header_sitter.h"
 #include "lite/core/op_registry.h"
@@ -264,7 +265,7 @@ public:
                const int memory_max_seq_len = -1) {
     
     int xdnn_ret;
-    xdnn_ret = xdnn::layer_norm(ctx_,    
+    xdnn_ret = xdnn::layer_norm<float>(ctx_,    
                            from_tensor, 
                            norm_from_tensor_buf_,
                            max_batch_size_,
@@ -286,6 +287,126 @@ public:
     } else {
       CHECK(false) << "Not implemented.";
     }
+
+    if(is_cross_attention) {
+      xdnn_ret = xdnn::add<float>(ctx_, 
+                          from_tensor, 
+                          masked_output_buf_, 
+                          masked_output_buf_,
+                          max_batch_size_ * hidden_units_);
+      xdnn_ret = xdnn::layer_norm<float>(ctx_,    
+                           masked_output_buf_, 
+                           norm_masked_output_buf_,
+                           max_batch_size_,
+                           t_parallel_param_.local_hidden_units_,
+                           1e-6f,
+                           param_->cross_layernorm.gamma,
+                           param_->cross_layernorm.beta,
+                           nullptr,
+                           nullptr);
+      CHECK_EQ(xdnn_ret, 0) << "norm masked layer norm error.";
+      /*
+      if(step == 1) {
+        const int dbg_len = max_batch_size_ * 1024;
+        vector<float> mask_cpu(dbg_len);
+        TargetWrapperXPU::MemcpySync(
+            mask_cpu.data(), norm_masked_output_buf_, dbg_len*sizeof(float), IoDirection::DtoH); 
+        std::cout << "norm mask out" << std::endl;
+        for(int x=0; x<dbg_len; x+=1000) {
+          std::cout << mask_cpu[x] << std::endl;
+        }
+        std::cout << std::endl;
+      }
+      */
+      cross_multi_head_attention(norm_masked_output_buf_,
+                                  memory_tensor,
+                                  key_mem_cache_,
+                                  value_mem_cache_,
+                                  cross_output_buf_,
+                                  memory_sequence_length,
+                                  finished,
+                                  param_->request_max_mem_seq_len,
+                                  step);
+      xdnn_ret = xdnn::add<float>(ctx_, 
+                          masked_output_buf_, 
+                          cross_output_buf_, 
+                          cross_output_buf_,
+                          max_batch_size_ * hidden_units_);
+      xdnn_ret = xdnn::layer_norm<float>(ctx_,    
+                           cross_output_buf_, 
+                           norm_cross_output_buf_,
+                           max_batch_size_,
+                           t_parallel_param_.local_hidden_units_,
+                           1e-6f,
+                           param_->ffn_layernorm.gamma,
+                           param_->ffn_layernorm.beta,
+                           nullptr,
+                           nullptr);
+      CHECK_EQ(xdnn_ret, 0) << "norm_cross_output_buf_ layer norm error.";
+
+      // start ffn()
+      int m = max_batch_size_;
+      int n = t_parallel_param_.local_hidden_units_;
+      xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+          ctx_, /* context */
+          norm_cross_output_buf_,          /* x */
+          param_->ffn.intermediate_weight.kernel,
+          ffn_inner_buf_,                      /* y */
+          m,                  /* m */
+          n * 4,                        /* n */
+          n,                        /* k */
+          false,                       /* x_trans */
+          false,                        /* w_trans */
+          nullptr,              /* x_max */
+          nullptr,             /* w_max */
+          nullptr,             /* y_max */
+          n,                        /* ldx */
+          n * 4,                        /* ldw */
+          n * 4,                        /* ldy */
+          1.0f,                        /* alpha */
+          0.0f,                        /* beta */
+          param_->ffn.intermediate_weight.bias, /* bias */
+          xdnn::Activation_t::RELU); /* act_type */
+          CHECK_EQ(xdnn_ret, 0) << "calling ffn fc_fusion error!.";
+
+      xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+          ctx_, /* context */
+          ffn_inner_buf_,          /* x */
+          param_->ffn.output_weight.kernel,
+          decoder_output,                      /* y */
+          m,                  /* m */
+          n,                        /* n */
+          n * 4,                        /* k */
+          false,                       /* x_trans */
+          false,                        /* w_trans */
+          nullptr,              /* x_max */
+          nullptr,             /* w_max */
+          nullptr,             /* y_max */
+          n * 4,                        /* ldx */
+          n,                        /* ldw */
+          n,                        /* ldy */
+          1.0f,                        /* alpha */
+          0.0f,                        /* beta */
+          param_->ffn.output_weight.bias, /* bias */
+          xdnn::Activation_t::LINEAR); /* act_type */
+          CHECK_EQ(xdnn_ret, 0) << "calling ffn fc_fusion error!.";
+
+      if(step == 1) {
+        const int dbg_len = max_batch_size_ * 1024;
+        vector<float> m_cpu(dbg_len);
+        TargetWrapperXPU::MemcpySync(
+            m_cpu.data(), decoder_output, dbg_len*sizeof(float), IoDirection::DtoH);
+        std::cout << "decoder_output out" << std::endl;
+        for(int x=0; x<dbg_len; x+=500) {
+          std::cout << m_cpu[x] << ' ';
+        }
+        std::cout << std::endl;
+      }
+      // end ffn()
+    } else {
+      CHECK(false) << "is_cross_attention -> false not implemented.";
+    }
+
   }
 
   void masked_multi_head_attention(const T *from_tensor,
@@ -299,37 +420,14 @@ public:
     int m = max_batch_size_;
     int n = t_parallel_param_.local_hidden_units_;
     // int k = hidden_units_;
-    /*
-    int decoder_max_seq_len = max_seq_len;
-    T alpha = (T)1.0f, beta = (T)0.0f;
-    */
-    // VLOG(2) << "DDDEBUG: " << m << '\t' << max_seq_len << '\t' << n;
-    // 32, 256 1024
-    /*
-    XPUScratchPadGuard weight_max_guard;
-    XPUScratchPadGuard input_max_guard;
-    XPUScratchPadGuard output_max_xpu_guard;
-    const int maxptr_size = xdnn::get_max_ptr_size(ctx_.GetRawContext());
-    input_max_xpu_guard = TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
-    weight_max_xpu_guard = TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
-    output_max_xpu_guard = TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
-    float* input_max_data = reinterpret_cast<float*>(input_max_xpu_guard_->addr_);
-    float* weight_max_data = reinterpret_cast<float*>(weight_max_xpu_guard_->addr_);
-    float* output_max_data = reinterpret_cast<float*>(output_max_xpu_guard_->addr_);
 
-    int xdnn_ret;
-    xdnn_ret = xdnn::findmax<float>(ctx_, from_tensor, m * n, input_max_data);
-    xdnn_ret = xdnn::findmax<float>(
-      ctx_, param_->self_attention.query_weight.kernel, n * n * 3, weight_max_data);
-    CHECK_EQ(xdnn_ret, 0) << "FIND MAX ERROR.";
-    */
     int xdnn_ret;
     if (is_fuse_QKV_in_normal_gemm_ == true) {
       xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
       ctx_, /* context */
       from_tensor,          /* x */
       param_->self_attention.query_weight.kernel,
-      decoder_output,                      /* y */
+      query_buf_,                      /* y */
       m,                  /* m */
       n * 3,                        /* n */
       n,                        /* k */
@@ -346,111 +444,252 @@ public:
       param_->self_attention.query_weight.bias, /* bias */
       xdnn::Activation_t::LINEAR); /* act_type */
       CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
-      /*
-      if(step == 1) {
-        const int dbg_len = m*3*n;
-        vector<float> debug_cpu(dbg_len); // 32 * 39 * 1024 * 3 = 3833856
-        vector<float> from_tensor_cpu(n*n);
-        TargetWrapperXPU::MemcpySync(
-            debug_cpu.data(), decoder_output, dbg_len*sizeof(float), IoDirection::DtoH); 
-                TargetWrapperXPU::MemcpySync(
-            from_tensor_cpu.data(), from_tensor, m*n*sizeof(float), IoDirection::DtoH); 
-        std::cout << "MATMUL" << std::endl;
-        for(int x=0; x<dbg_len; x+=1000) {
-          std::cout << debug_cpu[x] << ' ';
-        }
-        std::cout << std::endl;
-      }
-      */
+      
       xdnn::QKVAttnParam qkv_attn_param(m, 
                                       1, 
                                       head_num_,
                                       size_per_head_,
                                       {m,1,1,1},
                                       xdnn::Activation_t::RELU,
-                                      -1,
+                                      0,
                                       true);
-        lite::Tensor qk_tensor;
-        lite::Tensor qkv_tensor;
-        qk_tensor.Resize({m,hidden_units_, 1, 1});
-        qkv_tensor.Resize({m,hidden_units_});
-        // qk_tensor.mutable_data<float>(TARGET(kXPU), qk_tensor.dims().production() * sizeof(float));
-        xdnn_ret = xdnn::qk_attention<float, float, float, int16_t>(
+      lite::Tensor qk_tensor;
+      qk_tensor.Resize({m,head_num_, 1, 1});
+      // lite::Tensor qkv_tensor;
+      // qkv_tensor.Resize({m,hidden_units_});
+      lite::Tensor tmp_float_finish; // TODO: 为了适应xdnn api的接口，keep_alive_beam_ 应该是float 类型，就避免了cast的步骤，这里先打个补丁绕过去
+      tmp_float_finish.Resize({m,1});
+      xdnn_ret = xdnn::cast_v2<bool, float>(
+                            ctx_, 
+                            finished, 
+                            tmp_float_finish.mutable_data<float>(TARGET(kXPU), tmp_float_finish.dims().production()*sizeof(float)), 
+                            m);
+      xdnn_ret = xdnn::qk_attention<float, float, float, int32_t>(
           ctx_,
-          decoder_output,
-          decoder_output + hidden_units_,
+          query_buf_,
+          query_buf_ + hidden_units_,
           qk_tensor.mutable_data<float>(TARGET(kXPU), qk_tensor.dims().production() * sizeof(float)),
           nullptr,
           nullptr,
           nullptr,
           qkv_attn_param,
-          nullptr);
-        xdnn_ret = xdnn::qk_v_attention<float, float, float, int16_t>(
+          tmp_float_finish.data<float>());
+
+      xdnn_ret = xdnn::qk_v_attention<float, float, float, int32_t>(
           ctx_,
           qk_tensor.data<float>(),
-          decoder_output + hidden_units_ * 2,
-          qkv_tensor.mutable_data<float>(TARGET(kXPU), qkv_tensor.dims().production() * sizeof(float)),
+          query_buf_ + hidden_units_ * 2,
+          context_buf_, //qkv_tensor.mutable_data<float>(TARGET(kXPU), qkv_tensor.dims().production() * sizeof(float)),
           nullptr,
           nullptr,
           nullptr,
           qkv_attn_param);
-        
-        if(step == 1) {
-          const int dbg_len = m*hidden_units_;
-          vector<float> debug_cpu(dbg_len); // 32 * 39 * 1024 * 3 = 3833856
-          TargetWrapperXPU::MemcpySync(
-              debug_cpu.data(), qkv_tensor.data<float>(), dbg_len*sizeof(float), IoDirection::DtoH); 
-
-          std::cout << "res" << std::endl;
-          for(int x=0; x<dbg_len; x+=600) {
-            std::cout << debug_cpu[x] << ' ';
-          }
-          std::cout << std::endl;
-        }
-      /*
-      cublasMM_cublasLtMM_wrapper_decoder(
-          param_.cublaslt_handle,
-          param_.cublas_handle,
-          CUBLAS_OP_N,
-          CUBLAS_OP_N,
-          3 * n,
-          m,
-          k,
-          &alpha,
-          param_.self_attention.query_weight.kernel,
-          AType_,
-          3 * n,
-          from_tensor,
-          BType_,
-          k,
-          &beta,
-          query_buf_,
-          CType_,
-          3 * n,
-          param_.stream,
-          cublasAlgoMap_,
-          cublas_workspace_);
-
-      fusedQKV_masked_attention_dispatch<T>(
-          query_buf_,
-          param_.self_attention.query_weight.bias,
-          key_cache_,
-          value_cache_,
-          context_buf_,
-          finished,
-          param_.request_batch_size,
-          l_parallel_param_.local_batch_size,
-          t_parallel_param_.local_head_num_,
-          size_per_head_,
-          step,
-          decoder_max_seq_len,
-          param_.stream);
-          */
     } else {
       CHECK(false) << "NOT IMPLEMENTEDD.";
     }
-  
-  }
+
+    xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+      ctx_, /* context */
+      context_buf_,          /* x */
+      param_->self_attention.attention_output_weight.kernel,
+      decoder_output,                      /* y */
+      m,                  /* m */
+      n,                        /* n */
+      n,                        /* k */
+      false,                       /* x_trans */
+      false,                        /* w_trans */
+      nullptr,              /* x_max */
+      nullptr,             /* w_max */
+      nullptr,             /* y_max */
+      n,                        /* ldx */
+      n,                        /* ldw */
+      n,                        /* ldy */
+      1.0f,                        /* alpha */
+      0.0f,                        /* beta */
+      param_->self_attention.attention_output_weight.bias, /* bias */
+      xdnn::Activation_t::LINEAR); /* act_type */
+      CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error2!.";
+  } // end masked_multi_head_attention
+
+  void cross_multi_head_attention(const T *from_tensor,
+                                  const T *memory_tensor,
+                                  T *key_mem_cache,
+                                  T *value_mem_cache,
+                                  T *decoder_output,
+                                  const int32_t *memory_sequence_length,
+                                  const bool *finished,
+                                  const int32_t max_seq_len,
+                                  const int32_t step) {
+    int32_t m = max_batch_size_;
+    int32_t n = t_parallel_param_.local_hidden_units_;
+    // int32_t k = hidden_units_;
+    // VLOG(2) << "max_seq_len is " << max_seq_len; // 39
+    // VLOG(2) << "step is " << step;
+
+    int32_t xdnn_ret;
+    xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+      ctx_, /* context */
+      from_tensor,          /* x */
+      param_->cross_attention.query_weight.kernel,
+      query_buf_,                      /* y */
+      m,                  /* m */
+      n,                        /* n */
+      n,                        /* k */
+      false,                       /* x_trans */
+      false,                        /* w_trans */
+      nullptr,              /* x_max */
+      nullptr,             /* w_max */
+      nullptr,             /* y_max */
+      n,                        /* ldx */
+      n,                        /* ldw */
+      n,                        /* ldy */
+      1.0f,                        /* alpha */
+      0.0f,                        /* beta */
+      param_->cross_attention.query_weight.bias, /* bias */
+      xdnn::Activation_t::LINEAR); /* act_type */
+      CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
+    
+    if(step == 1) {
+      xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+        ctx_, /* context */
+        memory_tensor,          /* x */
+        param_->cross_attention.key_weight.kernel,
+        key_mem_cache,                      /* y */
+        m * max_seq_len,                  /* m */
+        n,                        /* n */
+        n,                        /* k */
+        false,                       /* x_trans */
+        false,                        /* w_trans */
+        nullptr,              /* x_max */
+        nullptr,             /* w_max */
+        nullptr,             /* y_max */
+        n,                        /* ldx */
+        n,                        /* ldw */
+        n,                        /* ldy */
+        1.0f,                        /* alpha */
+        0.0f,                        /* beta */
+        param_->cross_attention.key_weight.bias, /* bias */
+        xdnn::Activation_t::LINEAR); /* act_type */
+      CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
+
+      xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+        ctx_, /* context */
+        memory_tensor,          /* x */
+        param_->cross_attention.value_weight.kernel,
+        value_mem_cache,                      /* y */
+        m * max_seq_len,                  /* m */
+        n,                        /* n */
+        n,                        /* k */
+        false,                       /* x_trans */
+        false,                        /* w_trans */
+        nullptr,              /* x_max */
+        nullptr,             /* w_max */
+        nullptr,             /* y_max */
+        n,                        /* ldx */
+        n,                        /* ldw */
+        n,                        /* ldy */
+        1.0f,                        /* alpha */
+        0.0f,                        /* beta */
+        param_->cross_attention.value_weight.bias, /* bias */
+        xdnn::Activation_t::LINEAR); /* act_type */
+      CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
+    }
+
+    std::vector<int32_t> memory_sequence_length_cpu(m);
+    std::vector<float> tmp_float_finish_cpu(m * max_seq_len, -1e7);
+    TargetWrapperXPU::MemcpySync(
+                        memory_sequence_length_cpu.data(),
+                        memory_sequence_length, 
+                        m*sizeof(int32_t), 
+                        IoDirection::DtoH); 
+    for(size_t i=0; i<m; i++) {
+      fill_n(tmp_float_finish_cpu.begin() + i*max_seq_len, 
+              memory_sequence_length_cpu[i], 
+              0.0f);
+    }
+
+    lite::Tensor tmp_float_finish; // TODO: 为了适应xdnn api的接口，keep_alive_beam_ 应该是float 类型，就避免了cast的步骤，这里先打个补丁绕过去
+    tmp_float_finish.Resize({m, max_seq_len});
+    /*
+    xdnn_ret = xdnn::constant<float>(
+                            ctx_, 
+                            tmp_float_finish.mutable_data<float>(TARGET(kXPU), tmp_float_finish.dims().production() * sizeof(float)), 
+                            m * max_seq_len, 
+                            -10000000);
+    CHECK_EQ(xdnn_ret, 0) << "cross attention constant error.";
+    */
+    TargetWrapperXPU::MemcpySync(
+            tmp_float_finish.mutable_data<float>(TARGET(kXPU), tmp_float_finish.dims().production()*sizeof(float)), 
+            tmp_float_finish_cpu.data(), 
+            tmp_float_finish_cpu.size()*sizeof(int32_t), 
+            IoDirection::HtoD);  
+    xdnn::QKVAttnParam qkv_attn_param(m, 
+                                      max_seq_len, 
+                                      head_num_,
+                                      size_per_head_,
+                                      {m, 1, 1, max_seq_len},
+                                      xdnn::Activation_t::RELU,
+                                      0, // important!
+                                      false);
+    
+    lite::Tensor broadcast_q;
+    broadcast_q.Resize({m, max_seq_len, n});
+    xdnn_ret = xdnn::broadcast<float>(ctx_, 
+                            query_buf_,
+                            broadcast_q.mutable_data<float>(TARGET(kXPU), broadcast_q.dims().production() * sizeof(float)),
+                            {m, 1, n},
+                            {m, max_seq_len, n});
+    CHECK_EQ(xdnn_ret, 0) << "broadcast error!.";
+    
+    lite::Tensor qk_tensor;
+    qk_tensor.Resize({m, head_num_, 1, max_seq_len});
+
+    xdnn_ret = xdnn::qk_attention<float, float, float, int32_t>(
+          ctx_,
+          broadcast_q.data<float>(),
+          key_mem_cache,
+          qk_tensor.mutable_data<float>(TARGET(kXPU), qk_tensor.dims().production() * sizeof(float)),
+          nullptr,
+          nullptr,
+          nullptr,
+          qkv_attn_param,
+          tmp_float_finish.data<float>());
+    CHECK_EQ(xdnn_ret, 0) << "cross attention qk_attention error.";
+
+
+    xdnn_ret = xdnn::qk_v_attention<float, float, float, int32_t>(
+          ctx_,
+          qk_tensor.data<float>(),
+          value_mem_cache,
+          context_buf_, // tmp_qkv.mutable_data<float>(TARGET(kXPU), tmp_qkv.dims().production() * sizeof(float)),
+          nullptr,
+          nullptr,
+          nullptr,
+          qkv_attn_param);
+    CHECK_EQ(xdnn_ret, 0) << "cross attention qk_v_attention error.";
+    
+    xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+        ctx_, /* context */
+        context_buf_,          /* x */
+        param_->cross_attention.attention_output_weight.kernel,
+        decoder_output,                      /* y */
+        m,                  /* m */
+        n,                        /* n */
+        n,                        /* k */
+        false,                       /* x_trans */
+        false,                        /* w_trans */
+        nullptr,              /* x_max */
+        nullptr,             /* w_max */
+        nullptr,             /* y_max */
+        n,                        /* ldx */
+        n,                        /* ldw */
+        n,                        /* ldy */
+        1.0f,                        /* alpha */
+        0.0f,                        /* beta */
+        param_->cross_attention.attention_output_weight.bias, /* bias */
+        xdnn::Activation_t::LINEAR); /* act_type */
+    CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
+  } // end cross_multi_head_attention()
 };
 
 template<typename T>
@@ -994,12 +1233,7 @@ static void DecodingKernel(
   ifs.read(reinterpret_cast<char*>(cpu_input.data()), 32*39*1024*sizeof(float));
   ifs.read(reinterpret_cast<char*>(cpu_mem_seq_len.data()), 32*sizeof(int32_t));
   ifs.close();
-  /*
-  VLOG(2) << "MEM SEQ";
-  for(auto v: cpu_mem_seq_len) {
-    VLOG(2) << v;
-  }
-  */
+
   TargetWrapperXPU::MemcpySync(
             const_cast<lite::Tensor*>(input)->mutable_data(TARGET(kXPU), input->memory_size()), 
             cpu_input.data(), 
@@ -1098,8 +1332,10 @@ static void DecodingKernel(
     // intermediate proj
     params[i].ffn.intermediate_weight.kernel = ffn_inter_weight[i]->data<float>();
     params[i].ffn.intermediate_weight.bias = ffn_inter_bias[i]->data<float>();
+        VLOG(2) << "intermediate_weight: " << i << " dim: " <<  ffn_inter_weight[i]->dims();
     // out proj
     params[i].ffn.output_weight.kernel = ffn_out_weight[i]->data<float>();
+    VLOG(2) << "ojutput_weight: " << i << " dim: " <<  ffn_out_weight[i]->dims();
     params[i].ffn.output_weight.bias = ffn_out_bias[i]->data<float>();
   }
 
@@ -1276,7 +1512,7 @@ void FusionDecodingCompute::RunDecodingForward() {
     param.num_layer_,
     param.bos_id_,
     param.eos_id_,
-    param.max_len_,
+    max_out_len,
     param.beam_search_diversity_rate_,
     param.alpha_
   );
