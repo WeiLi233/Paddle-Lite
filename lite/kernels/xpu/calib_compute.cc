@@ -43,6 +43,8 @@ using xpu_calib_int64_to_int32 =
     paddle::lite::kernels::xpu::CalibCompute<int64_t, int32_t>;
 using xpu_calib_int32_to_int64 =
     paddle::lite::kernels::xpu::CalibCompute<int32_t, int64_t>;
+using xpu_calib_int32_to_float =
+    paddle::lite::kernels::xpu::CalibCompute<int32_t, float>;
 
 REGISTER_LITE_KERNEL(
     calib, kXPU, kFloat, kNCHW, xpu_calib_int64_to_int32, int64_to_int32)
@@ -56,6 +58,13 @@ REGISTER_LITE_KERNEL(
     .BindInput("Input",
                {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
     .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt64))})
+    .Finalize();
+
+REGISTER_LITE_KERNEL(
+    calib, kXPU, kFloat, kNCHW, xpu_calib_int32_to_float, int32_to_float)
+    .BindInput("Input",
+               {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
+    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .Finalize();
 
 REGISTER_LITE_KERNEL(
