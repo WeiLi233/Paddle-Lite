@@ -389,8 +389,15 @@ public:
           0.0f,                        /* beta */
           param_->ffn.output_weight.bias, /* bias */
           xdnn::Activation_t::LINEAR); /* act_type */
-          CHECK_EQ(xdnn_ret, 0) << "calling ffn fc_fusion error!.";
+      CHECK_EQ(xdnn_ret, 0) << "calling ffn fc_fusion error!.";
 
+      xdnn_ret = xdnn::add<float>(ctx_, 
+                          decoder_output, 
+                          cross_output_buf_, 
+                          decoder_output,
+                          max_batch_size_ * hidden_units_);
+      CHECK_EQ(xdnn_ret, 0) << "calling ffn add error!.";
+      /*
       if(step == 1) {
         const int dbg_len = max_batch_size_ * 1024;
         vector<float> m_cpu(dbg_len);
@@ -402,6 +409,7 @@ public:
         }
         std::cout << std::endl;
       }
+      */
       // end ffn()
     } else {
       CHECK(false) << "is_cross_attention -> false not implemented.";
@@ -610,14 +618,6 @@ public:
 
     lite::Tensor tmp_float_finish; // TODO: 为了适应xdnn api的接口，keep_alive_beam_ 应该是float 类型，就避免了cast的步骤，这里先打个补丁绕过去
     tmp_float_finish.Resize({m, max_seq_len});
-    /*
-    xdnn_ret = xdnn::constant<float>(
-                            ctx_, 
-                            tmp_float_finish.mutable_data<float>(TARGET(kXPU), tmp_float_finish.dims().production() * sizeof(float)), 
-                            m * max_seq_len, 
-                            -10000000);
-    CHECK_EQ(xdnn_ret, 0) << "cross attention constant error.";
-    */
     TargetWrapperXPU::MemcpySync(
             tmp_float_finish.mutable_data<float>(TARGET(kXPU), tmp_float_finish.dims().production()*sizeof(float)), 
             tmp_float_finish_cpu.data(), 
@@ -902,6 +902,8 @@ public:
       // select the top 2*beam_width.
       args_.temp_storage_size_ +=
           ceil(args_.batch_size_ * args_.beam_width_ * args_.beam_width_ / 4.) * 4 * 2;
+    } else {
+      CHECK(false) << "keep_alive_beam_ == false not implemented.";
     }
 
     // prevent memory misalinged address
@@ -1013,12 +1015,14 @@ public:
   
   void forward(const vector<DecoderInitParam<T>>& param, DecodingInitParam<T>& decoding_params) {
     const int m = args_.batch_size_ * args_.beam_width_;
-    // const int k = args_.hidden_units_;
-    // const int n = args_.vocab_size_padded_;
-    // const T *embedding_kernel_ptr = nullptr;
-    // const T *embedding_bias_ptr = nullptr;
-    // int min_trg_len = 0;
-    // int max_trg_len = 0;
+    const int k = args_.hidden_units_;
+    const int n = args_.vocab_size_padded_;
+    const T *embedding_kernel_ptr = nullptr;
+    const T *embedding_bias_ptr = nullptr;
+    embedding_kernel_ptr = (const T*)decoding_params.embedding_kernel;
+    embedding_bias_ptr = (const T*)decoding_params.embedding_bias;
+    int32_t min_trg_len = 0;
+    // int32_t max_trg_len = 0;
 
     // call init_kernelLauncher_v2()
     int xdnn_ret;
@@ -1048,6 +1052,7 @@ public:
                             -1e20f); // TODO
     CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 4!.";
     // end init_kernelLauncher_v2()
+    
     int cache_size =
         (args_.prefix_lm_) ? 
             (m * (args_.seq_len_ + args_.memory_max_seq_len_) * args_.hidden_units_)
@@ -1058,12 +1063,6 @@ public:
       // we use two-way buffer
       int kv_cache_id = step & 0x1;
       // for debugging
-      /*
-      if(step == 2) {
-        vector<int32_t> tmp_word_cpu{9816, 14385, 7080, 1642, 44, 56, 1702, 138, 8250, 56, 138, 6406, 24981, 6732, 126, 56, 21, 56, 318, 96, 56, 96, 213, 477, 96, 56, 617, 126, 120, 138, 96, 56};
-        TargetWrapperXPU::MemcpySync(
-            word_ids_buf_, tmp_word_cpu.data(), tmp_word_cpu.size()*sizeof(int32_t), IoDirection::HtoD);
-      }*/
       // call embedding_lookup_sine_position_encoding_kernel_launcher()
       xdnn_ret = xdnn::embedding<float, int32_t>(
                                 ctx_, /* context */
@@ -1093,47 +1092,24 @@ public:
                     {m, static_cast<int32_t>(args_.hidden_units_)},
                     {1, static_cast<int32_t>(args_.hidden_units_)});
       CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 7!.";
-      /*
-      vector<float> debug_cpu(256);
-      vector<int32_t> word_cpu(32);
-      vector<float> pos_cpu(32);
-      TargetWrapperXPU::MemcpySync(
-            debug_cpu.data(), from_tensor_[0], 256*sizeof(float), IoDirection::DtoH);
-      TargetWrapperXPU::MemcpySync(
-            word_cpu.data(), word_ids_buf_, 32*sizeof(int32_t), IoDirection::DtoH);
-      TargetWrapperXPU::MemcpySync(
-            pos_cpu.data(), decoding_params.position_encoding_table, 32*sizeof(float), IoDirection::DtoH);
-      if(step == 2) {
-          vector<float> debug_cpu(256);
-          TargetWrapperXPU::MemcpySync(
-            debug_cpu.data(), from_tensor_[0], 256*sizeof(float), IoDirection::DtoH); 
-          std::cout << "STEP2 DEBUG" << std::endl;
-          for(int x=0; x<32; x++) {
-            std::cout << debug_cpu[x] << ' ';
-          }
-          std::cout << std::endl;
-      }
-      */
       // end embedding_lookup_sine_position_encoding_kernel_launcher()
 
       int from_id, out_id;
       for (int layer = 0; layer < args_.decoder_layers_; ++layer) {
         /*
-          For the first layer (layer-0), from_id  is 0. We also stored the
-          embedding lookup
-          result in from_tensor_[0]
-        */
+         * For the first layer (layer-0), from_id  is 0. We also stored the embedding lookup
+         * result in from_tensor_[0]
+         */
         from_id = layer & 0x1;
         out_id = 1 - from_id;
 
         /*
-          We use one decoder_ object to process multiple decoder layers.
-
-          At the beginning of each decoder layer, we initialize the decoder
-          object
-          with corresponding weights and decoder_buf_.
-          The decoder_buf_ is reused.
-        */
+         * We use one decoder_ object to process multiple decoder layers.
+         *
+         * At the beginning of each decoder layer, we initialize the decoder object
+         * with corresponding weights and decoder_buf_.
+         * The decoder_buf_ is reused.
+         */
         decoder_->initialize(param[layer], decoder_buf_);
     
         if (args_.prefix_lm_) {
@@ -1153,8 +1129,167 @@ public:
               true, // is_cross_attention
               keep_alive_beam_ ? alive_finished_buf_ : finished_buf_);
         }
+      } // end layer loop
+
+      if(step > min_trg_len) {
+        xdnn_ret = xdnn::layer_norm<float>(ctx_,    
+                           from_tensor_[out_id], 
+                           decoder_normed_result_buf_,
+                           m,
+                           k,
+                           1e-6f,
+                           decoding_params.layernorm.gamma,
+                           decoding_params.layernorm.beta,
+                           nullptr,
+                           nullptr);
+        
+        xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+            ctx_, /* context */
+            decoder_normed_result_buf_,          /* x */
+            embedding_kernel_ptr,
+            tmp_logits_buf_,                      /* y */
+            m,                  /* m */
+            n,                        /* n */
+            k,                        /* k */
+            false,                       /* x_trans */
+            false,                        /* w_trans */
+            nullptr,              /* x_max */
+            nullptr,             /* w_max */
+            nullptr,             /* y_max */
+            k,                        /* ldx */
+            n,                        /* ldw */
+            n,                        /* ldy */
+            1.0f,                        /* alpha */
+            0.0f,                        /* beta */
+            embedding_bias_ptr, /* bias */
+            xdnn::Activation_t::LINEAR); /* act_type */
+        CHECK_EQ(xdnn_ret, 0) << "calling embedding_kernel fc_fusion error!.";  
+      
+        if(is_fuse_topk_softMax_ == true) {
+          if(keep_alive_beam_ == true) {
+            // Use separated alive and finish beam queues to avoid the decrease
+            // of alive beams.
+            topK_softMax_update(tmp_logits_buf_,
+                                finished_buf_,
+                                alive_finished_buf_,
+                                decoding_params.sequence_length,
+                                word_ids_buf_,
+                                parent_ids_buf_,
+                                decoding_params.output_ids + (step - 1) * m * 2,
+                                decoding_params.parent_ids + (step - 1) * m * 2,
+                                cum_log_buf_,
+                                reinterpret_cast<void *>(temp_storage_),
+                                step,
+                                args_);
+          } else {
+            CHECK(false) << "keep_alive_beam == false not implemented.";
+          }
+        } else {
+          CHECK(false) << "is_fuse_topk_softMax == false not implemented.";
+        }
       }
+    } // end step loop
+  }
+
+  void topK_softMax_update(
+            const T* log_probs,
+            bool* finished,
+            bool* alive_finished,
+            int32_t* sequence_length,
+            int32_t* word_ids,
+            int32_t* parent_ids,  // for update cache, only include alive beams
+            int32_t* output_word_ids,
+            int32_t* output_parent_ids,  // for gather tree, include both alive and finish beams
+            float* output_cum_log_probs,  // NOTE: cum_log_probs is T in V3.1
+            void* temp_storage,
+            const int32_t step,
+            DecodingBeamsearchArguments args) {
+    
+    const int32_t temp_storage_size = args.temp_storage_size_;
+    const int32_t batch_size = args.batch_size_;
+    const int32_t beam_width = args.beam_width_;
+    const int32_t vocab_size = args.vocab_size_padded_;
+    const int32_t end_id = args.end_id_;
+    const T diversity_rate = args.beam_search_diversity_rate_;
+    const int32_t max_out_len = args.seq_len_;
+    const float alpha = args.alpha_;
+    const int32_t finished_candidate_num = args.finished_candidate_num_;
+    const bool early_stopping = args.early_stopping_;
+    if(step == 1) {
+      VLOG(2) << "[MYDEBUGXPU] temp_storage_size = " << temp_storage_size;
+      VLOG(2) << "[MYDEBUGXPU] batch_size = " << batch_size;
+      VLOG(2) << "[MYDEBUGXPU] beam_width = " << beam_width;
+      VLOG(2) << "[MYDEBUGXPU] vocab_size = " << vocab_size;
+      VLOG(2) << "[MYDEBUGXPU] end_id = " << end_id;
+      VLOG(2) << "[MYDEBUGXPU] diversity_rate = " << diversity_rate;
+      VLOG(2) << "[MYDEBUGXPU] max_out_len = " << max_out_len;
+      VLOG(2) << "[MYDEBUGXPU] alpha = " << alpha;
+      VLOG(2) << "[MYDEBUGXPU] finished_candidate_num = " << finished_candidate_num;
+      VLOG(2) << "[MYDEBUGXPU] early_stopping = " << early_stopping;
     }
+
+    lite::Tensor sorted_value;
+    sorted_value.Resize({batch_size*beam_width, beam_width*2});
+    lite::Tensor sorted_ind;
+    sorted_ind.Resize({batch_size*beam_width, beam_width*2});
+    int32_t xdnn_ret;
+    xdnn_ret = xdnn::sorted_softmax_topk<float, int32_t>(
+                                        ctx_,
+                                        log_probs,
+                                        sorted_value.mutable_data<float>(TARGET(kXPU), sorted_value.dims().production()*sizeof(float)),
+                                        sorted_ind.mutable_data<int32_t>(TARGET(kXPU), sorted_value.dims().production()*sizeof(int32_t)),
+                                        {1, 4814},
+                                        1,
+                                        4*2);
+    CHECK_EQ(xdnn_ret, 0) << "calling sorted_softmax_topk error.";
+
+    /*
+    xdnn_ret = xdnn::softmax<float>(ctx_,
+                        log_probs,
+                        reinterpret_cast<float*>(temp_storage_),
+                        {batch_size*beam_width, vocab_size},
+                        1);
+    CHECK_EQ(xdnn_ret, 0) << "softmax error.";
+
+    lite::Tensor sorted_ind;
+    sorted_ind.Resize({1, beam_width*2});
+    xdnn_ret = xdnn::sorted_topk<float>(
+                            ctx_,
+                            log_probs,
+                            reinterpret_cast<float*>(temp_storage_),
+                            sorted_ind.mutable_data<int32_t>(TARGET(kXPU), sorted_ind.dims().production()*sizeof(int32_t)),
+                            1,
+                            vocab_size,
+                            beam_width*2);
+    CHECK_EQ(xdnn_ret, 0) << "sorted topk error.";
+    */
+    if(step == 1) {
+      
+      std::vector<float> points_debug(batch_size * beam_width * vocab_size);
+      TargetWrapperXPU::MemcpySync(
+              points_debug.data(), log_probs, batch_size * beam_width * vocab_size*sizeof(float), IoDirection::DtoH);
+      std::cout << "logit" << std::endl;
+      std::cout << points_debug[9816] << std::endl;
+      std::cout << points_debug[14385] << std::endl;
+      std::cout << points_debug[7080] << std::endl;
+      std::cout << points_debug[1642] << std::endl;
+      std::cout << points_debug[1163] << std::endl;
+      std::cout << std::endl;
+      
+      std::vector<int32_t> cpu_debug(8);
+      std::vector<float> h_sorted_value(8);
+      TargetWrapperXPU::MemcpySync(
+              cpu_debug.data(), sorted_ind.data<int32_t>(), 8*sizeof(int32_t), IoDirection::DtoH);
+      TargetWrapperXPU::MemcpySync(
+              h_sorted_value.data(), sorted_value.data<float>(), 8*sizeof(float), IoDirection::DtoH);
+      std::cout << "SORT" << std::endl;
+      for(int x=0; x<8; x++) {
+        std::cout << cpu_debug[x] << ' ' << h_sorted_value[x] << std::endl;
+      }
+      std::cout << std::endl;
+    }
+  
+
   }
 
   virtual ~DecodingBeamsearch() {
@@ -1330,12 +1465,10 @@ static void DecodingKernel(
     params[i].ffn_layernorm.gamma = ffn_ln_weight[i]->data<float>();
     params[i].ffn_layernorm.beta = ffn_ln_bias[i]->data<float>();
     // intermediate proj
-    params[i].ffn.intermediate_weight.kernel = ffn_inter_weight[i]->data<float>();
-    params[i].ffn.intermediate_weight.bias = ffn_inter_bias[i]->data<float>();
-        VLOG(2) << "intermediate_weight: " << i << " dim: " <<  ffn_inter_weight[i]->dims();
+    params[i].ffn.intermediate_weight.kernel = ffn_inter_weight[i]->data<float>(); // [1024, 4096]
+    params[i].ffn.intermediate_weight.bias = ffn_inter_bias[i]->data<float>(); 
     // out proj
-    params[i].ffn.output_weight.kernel = ffn_out_weight[i]->data<float>();
-    VLOG(2) << "ojutput_weight: " << i << " dim: " <<  ffn_out_weight[i]->dims();
+    params[i].ffn.output_weight.kernel = ffn_out_weight[i]->data<float>(); // [4096, 1024]
     params[i].ffn.output_weight.bias = ffn_out_bias[i]->data<float>();
   }
 
@@ -1346,6 +1479,7 @@ static void DecodingKernel(
 
   // for weight sharing matmul
   decoding_params.embedding_kernel = embedding_weight->data<float>();
+  VLOG(2) << "embedding_kernel: " <<  embedding_weight->dims();
   // for matmul bias
   decoding_params.embedding_bias = embedding_bias->data<float>();
 
