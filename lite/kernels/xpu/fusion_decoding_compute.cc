@@ -16,6 +16,9 @@
 #include <fstream>
 #include <memory>
 #include <algorithm>
+#include <cmath> // TOOD: remove in the future
+#include <vector> // TODO: ...
+#include <climits>
 #include "lite/kernels/xpu/fusion_decoding_compute.h"
 #include "lite/backends/xpu/xpu_header_sitter.h"
 #include "lite/core/op_registry.h"
@@ -29,6 +32,7 @@ namespace xpu {
 
 static constexpr int MAX_K = 4;
 static constexpr int SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS = 128;
+static constexpr float PL_FLT_MIN = -1e20;
 
 template<typename T>
 struct DenseWeight{
@@ -166,6 +170,14 @@ struct TensorParallelParam
   int local_head_num_{0};
   int local_hidden_units_{0};
 };
+
+template <typename T>
+struct TopKFinish {
+  T u;
+  int32_t idx;
+  int32_t len;
+};
+
 
 template <typename T>
 class OpenDecoder {
@@ -871,10 +883,8 @@ public:
         // 32
     /// VLOG(2) << "DDDEBUG " << from_tensor_size << '\t' << decoder_normed_result_buffer_size << '\t' << cache_size << '\t' << mem_cache_size << '\t' << finished_count_size;
     
-    size_t storage_size_per_beam =
-        2 * args_.beam_width_ + SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS * (2 * MAX_K + 2);
-    args_.temp_storage_size_ = 
-        args_.batch_size_ * args_.beam_width_ * storage_size_per_beam;  // type float
+    size_t storage_size_per_beam = 2 * args_.beam_width_ + SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS * (2 * MAX_K + 2);
+    args_.temp_storage_size_ = args_.batch_size_ * args_.beam_width_ * storage_size_per_beam;  // type float
     args_.temp_storage_size_ = (size_t)(
         ceil(args_.batch_size_ * args_.beam_width_ * args_.beam_width_ / 4.) *
             4 * 2 +
@@ -1036,21 +1046,39 @@ public:
                             args_.batch_size_ * args_.beam_width_, 
                             false);
     CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 2!.";
+    /*
     xdnn_ret = xdnn::constant<int32_t>(ctx_, 
                             decoding_params.sequence_length, 
                             args_.batch_size_ * args_.beam_width_ * 2, 
                             0);
     CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 3!.";
+    */
     xdnn_ret = xdnn::constant<int32_t>(ctx_, 
                             word_ids_buf_, 
                             args_.batch_size_ * args_.beam_width_, 
                             args_.start_id_);
     CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 3!.";
+    
+    /*
     xdnn_ret = xdnn::constant<float>(ctx_, 
                             cum_log_buf_, 
                             args_.batch_size_ * args_.beam_width_ * 2, 
                             -1e20f); // TODO
     CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 4!.";
+    */
+    vector<float> h_cum_log_buf_0(args_.batch_size_ * args_.beam_width_, -1e20f);
+    vector<float> h_cum_log_buf_1(args_.batch_size_ * args_.beam_width_, -1e20f);
+    for(size_t tmp_i=0; tmp_i<args_.batch_size_; tmp_i++) {
+      h_cum_log_buf_1.at(tmp_i * args_.beam_width_) = 0.0f;
+    }
+
+    /*
+    TargetWrapperXPU::MemcpySync(
+            cum_log_buf_, 
+            h_tmp_cum_log_buf.data(), 
+            args_.batch_size_ * args_.beam_width_ * 2 * sizeof(float), 
+            IoDirection::HtoD);
+    */
     // end init_kernelLauncher_v2()
     
     int cache_size =
@@ -1058,6 +1086,7 @@ public:
             (m * (args_.seq_len_ + args_.memory_max_seq_len_) * args_.hidden_units_)
             : (m * args_.seq_len_ * args_.hidden_units_);  // type T
             // 4 * 8 * 256 * 1024 = 8388608
+
 
     for (uint step = 1; step <= args_.seq_len_; ++step) {
       // we use two-way buffer
@@ -1177,7 +1206,8 @@ public:
                                 parent_ids_buf_,
                                 decoding_params.output_ids + (step - 1) * m * 2,
                                 decoding_params.parent_ids + (step - 1) * m * 2,
-                                cum_log_buf_,
+                                &h_cum_log_buf_0,
+                                &h_cum_log_buf_1,
                                 reinterpret_cast<void *>(temp_storage_),
                                 step,
                                 args_);
@@ -1195,12 +1225,13 @@ public:
             const T* log_probs,
             bool* finished,
             bool* alive_finished,
-            int32_t* sequence_length,
-            int32_t* word_ids,
-            int32_t* parent_ids,  // for update cache, only include alive beams
-            int32_t* output_word_ids,
-            int32_t* output_parent_ids,  // for gather tree, include both alive and finish beams
-            float* output_cum_log_probs,  // NOTE: cum_log_probs is T in V3.1
+            int32_t* h_sequence_length,
+            int32_t* word_ids_buf,
+            int32_t* parent_ids_buf,
+            int32_t* h_output_word_ids,
+            int32_t* h_output_parent_ids,  // for gather tree, include both alive and finish beams
+            vector<float>* h_output_cum_log_probs_ptr0,  // NOTE: cum_log_probs is T in V3.1
+            vector<float>* h_output_cum_log_probs_ptr1,
             void* temp_storage,
             const int32_t step,
             DecodingBeamsearchArguments args) {
@@ -1228,67 +1259,157 @@ public:
       VLOG(2) << "[MYDEBUGXPU] early_stopping = " << early_stopping;
     }
 
-    lite::Tensor sorted_value;
-    sorted_value.Resize({batch_size*beam_width, beam_width*2});
-    lite::Tensor sorted_ind;
-    sorted_ind.Resize({batch_size*beam_width, beam_width*2});
+    lite::Tensor sorted_beam_value;
+    sorted_beam_value.Resize({batch_size*beam_width, beam_width*2});
+    lite::Tensor sorted_ind_beam_topk;
+    sorted_ind_beam_topk.Resize({batch_size*beam_width, beam_width*2});
     int32_t xdnn_ret;
     xdnn_ret = xdnn::sorted_softmax_topk<float, int32_t>(
                                         ctx_,
                                         log_probs,
-                                        sorted_value.mutable_data<float>(TARGET(kXPU), sorted_value.dims().production()*sizeof(float)),
-                                        sorted_ind.mutable_data<int32_t>(TARGET(kXPU), sorted_value.dims().production()*sizeof(int32_t)),
-                                        {1, 4814},
+                                        sorted_beam_value.mutable_data<float>(TARGET(kXPU), sorted_beam_value.dims().production()*sizeof(float)),
+                                        sorted_ind_beam_topk.mutable_data<int32_t>(TARGET(kXPU), sorted_ind_beam_topk.dims().production()*sizeof(int32_t)),
+                                        {batch_size*beam_width, vocab_size},
                                         1,
-                                        4*2);
+                                        beam_width*2);
     CHECK_EQ(xdnn_ret, 0) << "calling sorted_softmax_topk error.";
 
-    /*
-    xdnn_ret = xdnn::softmax<float>(ctx_,
-                        log_probs,
-                        reinterpret_cast<float*>(temp_storage_),
-                        {batch_size*beam_width, vocab_size},
-                        1);
-    CHECK_EQ(xdnn_ret, 0) << "softmax error.";
+    lite::Tensor sub_cum_log_buf_1; // TODO: remove in the future
+    sub_cum_log_buf_1.Resize({batch_size, beam_width});
+    sub_cum_log_buf_1.mutable_data<float>(TARGET(kXPU), sub_cum_log_buf_1.dims().production() * sizeof(float));
+    TargetWrapperXPU::MemcpySync(
+            sub_cum_log_buf_1.mutable_data<float>(), 
+            h_output_cum_log_probs_ptr1->data(), 
+            batch_size*beam_width*sizeof(float), 
+            IoDirection::HtoD);
+    
+    xdnn_ret = xdnn::broadcast_add<float>(ctx_,
+                              sorted_beam_value.data<float>(),
+                              sub_cum_log_buf_1.data<float>(),
+                              sorted_beam_value.mutable_data<float>(),
+                              {batch_size*beam_width, beam_width*2},
+                              {batch_size*beam_width, 1});
+    CHECK_EQ(xdnn_ret, 0) << "calling broadcast_add error.";
 
-    lite::Tensor sorted_ind;
-    sorted_ind.Resize({1, beam_width*2});
-    xdnn_ret = xdnn::sorted_topk<float>(
-                            ctx_,
-                            log_probs,
-                            reinterpret_cast<float*>(temp_storage_),
-                            sorted_ind.mutable_data<int32_t>(TARGET(kXPU), sorted_ind.dims().production()*sizeof(int32_t)),
-                            1,
-                            vocab_size,
-                            beam_width*2);
-    CHECK_EQ(xdnn_ret, 0) << "sorted topk error.";
-    */
-    if(step == 1) {
-      
-      std::vector<float> points_debug(batch_size * beam_width * vocab_size);
-      TargetWrapperXPU::MemcpySync(
-              points_debug.data(), log_probs, batch_size * beam_width * vocab_size*sizeof(float), IoDirection::DtoH);
-      std::cout << "logit" << std::endl;
-      std::cout << points_debug[9816] << std::endl;
-      std::cout << points_debug[14385] << std::endl;
-      std::cout << points_debug[7080] << std::endl;
-      std::cout << points_debug[1642] << std::endl;
-      std::cout << points_debug[1163] << std::endl;
-      std::cout << std::endl;
-      
-      std::vector<int32_t> cpu_debug(8);
-      std::vector<float> h_sorted_value(8);
-      TargetWrapperXPU::MemcpySync(
-              cpu_debug.data(), sorted_ind.data<int32_t>(), 8*sizeof(int32_t), IoDirection::DtoH);
-      TargetWrapperXPU::MemcpySync(
-              h_sorted_value.data(), sorted_value.data<float>(), 8*sizeof(float), IoDirection::DtoH);
-      std::cout << "SORT" << std::endl;
-      for(int x=0; x<8; x++) {
-        std::cout << cpu_debug[x] << ' ' << h_sorted_value[x] << std::endl;
+    // implement batch_topk_update_kernel() online_softmax_beamsearch_kernels.cu L1294
+    lite::Tensor sorted_value_total_topk;
+    sorted_value_total_topk.Resize({batch_size, beam_width*2});
+    lite::Tensor sorted_ind_total_topk;
+    sorted_ind_total_topk.Resize({batch_size, beam_width*2});
+    xdnn_ret = xdnn::sorted_topk<float>(ctx_,
+                                        sorted_beam_value.data<float>(),
+                                        sorted_value_total_topk.mutable_data<float>(TARGET(kXPU), sorted_value_total_topk.dims().production()*sizeof(float)),
+                                        sorted_ind_total_topk.mutable_data<int32_t>(TARGET(kXPU), sorted_ind_total_topk.dims().production()*sizeof(int32_t)),
+                                        batch_size,
+                                        beam_width * beam_width * 2,
+                                        beam_width * 2);
+    CHECK_EQ(xdnn_ret, 0) << "calling sorted_topk error.";
+
+    vector<int32_t> h_sorted_ind_beam_topk(batch_size * beam_width * beam_width * 2);
+    vector<int32_t> h_sorted_ind_total_topk(batch_size * beam_width * 2);
+    vector<float> h_sorted_value_total_topk(batch_size * beam_width * 2);
+    TargetWrapperXPU::MemcpySync(
+            h_sorted_ind_beam_topk.data(), 
+            sorted_ind_beam_topk.data<int32_t>(), 
+            batch_size * beam_width * beam_width * 2 * sizeof(int32_t), 
+            IoDirection::DtoH); 
+    TargetWrapperXPU::MemcpySync(
+            h_sorted_ind_total_topk.data(), 
+            sorted_ind_total_topk.data<int32_t>(), 
+            batch_size * beam_width * 2 * sizeof(int32_t), 
+            IoDirection::DtoH); 
+    TargetWrapperXPU::MemcpySync(
+            h_sorted_value_total_topk.data(), 
+            sorted_value_total_topk.data<float>(), 
+            batch_size * beam_width * 2 * sizeof(float), 
+            IoDirection::DtoH);
+    
+    vector<int32_t> h_tmp_word_ids_buf(batch_size * beam_width);
+    vector<int32_t> h_tmp_parent_ids_buf(batch_size * beam_width);
+    vector<int8_t> h_temp_finished(batch_size * beam_width * 2);
+    vector<int8_t> h_temp_alive_finished(batch_size * beam_width);
+    TargetWrapperXPU::MemcpySync(
+            h_tmp_word_ids_buf.data(), 
+            word_ids_buf, 
+            batch_size * beam_width * sizeof(int32_t), 
+            IoDirection::DtoH);
+    TargetWrapperXPU::MemcpySync(
+            h_tmp_parent_ids_buf.data(), 
+            parent_ids_buf, 
+            batch_size * beam_width * sizeof(int32_t), 
+            IoDirection::DtoH);
+    TargetWrapperXPU::MemcpySync(
+            h_temp_finished.data(), 
+            finished, 
+            batch_size * beam_width * sizeof(bool) * 2, 
+            IoDirection::DtoH);
+    TargetWrapperXPU::MemcpySync(
+            h_temp_alive_finished.data(), 
+            alive_finished, 
+            batch_size * beam_width * sizeof(bool), 
+            IoDirection::DtoH);
+
+    float length_penalty = std::pow((5. + step + 1) / 6., alpha);
+    // float max_length_penalty = std::pow((5. + max_out_len + 1) / 6., alpha);
+
+    for(size_t bs=0; bs<batch_size; bs++) {
+      T* output_cum_log_probs_ptr0 = h_output_cum_log_probs_ptr0->data() + bs * beam_width;
+      T* output_cum_log_probs_ptr1 = h_output_cum_log_probs_ptr1->data() + bs * beam_width;
+      int32_t* output_word_ids_ptr = h_output_word_ids + bs * (beam_width * 2);
+      int32_t* output_parent_ids_ptr = h_output_parent_ids + bs * (beam_width * 2);
+      int8_t* finished_ptr = h_temp_finished.data() + bs * (beam_width * 2);
+      int8_t* alive_finished_ptr = h_temp_alive_finished.data() + bs * beam_width;
+      float* h_sorted_value_total_topk_ptr = h_sorted_value_total_topk.data() + bs * (beam_width * 2);
+      int32_t* h_sorted_ind_total_topk_ptr = h_sorted_ind_total_topk.data() + bs * (beam_width * 2);
+      int32_t* h_sorted_ind_beam_topk_ptr = h_sorted_ind_beam_topk.data() + bs * (beam_width * beam_width * 2);
+      int32_t* h_tmp_word_ids_buf_ptr = h_tmp_word_ids_buf.data() + bs * beam_width;
+      int32_t* h_tmp_parent_ids_buf_ptr = h_tmp_parent_ids_buf.data() + bs * beam_width;
+      int32_t* sequence_length_ptr = h_sequence_length + bs * (beam_width * 2);
+
+      int32_t finish_num = 0;
+      vector<TopKFinish<T>> finish_candidate(beam_width);
+      if(step == 1) {
+        for(size_t i=0; i<beam_width; i++) {
+          finish_candidate[i].u = PL_FLT_MIN;
+          finish_candidate[i].idx = -1;
+          finish_candidate[i].len = 0;
+        }
+      } else {
+        for(size_t i=0; i<beam_width; i++) {
+          finish_candidate[i].u = output_cum_log_probs_ptr0[i];
+          finish_candidate[i].idx = i;
+          finish_candidate[i].len = output_parent_ids_ptr[i];
+          if(finished_ptr[i] != 0) ++finish_num;
+        }
       }
-      std::cout << std::endl;
-    }
-  
+
+      int32_t alive_num = 0;
+      for(size_t i=0; i<beam_width*2; i++) {
+        int32_t word_id = h_sorted_ind_beam_topk_ptr[h_sorted_ind_total_topk_ptr[i]];
+        float cum_log_prob = h_sorted_value_total_topk_ptr[i];
+        int32_t beam_id = h_sorted_ind_total_topk_ptr[i] / (beam_width * 2);
+
+        int32_t beam_id_in_output = bs * (beam_width * 2) + beam_id / beam_width + beam_width;
+        if(word_id == end_id) {
+          finish_candidate.push_back(TopKFinish<T>{cum_log_prob / length_penalty, beam_id_in_output, step});
+          if (finish_num != beam_width) finish_num++;
+        } else if (alive_num < beam_width) {
+          h_tmp_parent_ids_buf_ptr[alive_num] = beam_id;
+          h_tmp_word_ids_buf_ptr[alive_num] = word_id;
+          // Also put alive candidates after finish candidates, since output
+          // must include both the finish and alive to trace full path
+          output_word_ids_ptr[beam_width + alive_num] = word_id;
+          output_parent_ids_ptr[beam_width + alive_num] = beam_id_in_output;
+          output_cum_log_probs_ptr1[alive_num] = cum_log_prob;
+          sequence_length_ptr[beam_width + alive_num] = step;
+          finished_ptr[beam_width + alive_num] = 0;
+          alive_finished_ptr[alive_num] = 0;
+          alive_num++;
+        }
+      }
+    
+    } // end batch
+
 
   }
 
@@ -1404,11 +1525,11 @@ static void DecodingKernel(
   VLOG(2) << "EMBEDDING DIM " << word_embedding->dims();
   DecodingInitParam<float> decoding_params;
   decoding_params.output_ids = output_ids->mutable_data<int32_t>(
-                                  TARGET(kXPU), output_ids->memory_size());
+                                  TARGET(kHost), output_ids->memory_size());
   decoding_params.parent_ids = parent_ids->mutable_data<int32_t>(
-                                  TARGET(kXPU), parent_ids->memory_size());
+                                  TARGET(kHost), parent_ids->memory_size());
   decoding_params.sequence_length = sequence_length->mutable_data<int32_t>(
-                                  TARGET(kXPU), sequence_length->memory_size());
+                                  TARGET(kHost), sequence_length->memory_size());
   decoding_params.memory_tensor = input->data<float>();
   decoding_params.memory_sequence_length = mem_seq_len->data<int32_t>();
 
@@ -1479,7 +1600,7 @@ static void DecodingKernel(
 
   // for weight sharing matmul
   decoding_params.embedding_kernel = embedding_weight->data<float>();
-  VLOG(2) << "embedding_kernel: " <<  embedding_weight->dims();
+  // VLOG(2) << "embedding_kernel: " <<  embedding_weight->dims();
   // for matmul bias
   decoding_params.embedding_bias = embedding_bias->data<float>();
 
@@ -1592,11 +1713,11 @@ void FusionDecodingCompute::RunDecodingForward() {
   }
 
   param.output_ids_->Resize(output_dims);
-  param.output_ids_->mutable_data(TARGET(kXPU), param.output_ids_->dims().production()*sizeof(int32_t));
+  param.output_ids_->mutable_data(TARGET(kHost), param.output_ids_->dims().production()*sizeof(int32_t));
   param.parent_ids_->Resize(parent_ids_dims);
-  param.parent_ids_->mutable_data(TARGET(kXPU), param.parent_ids_->dims().production()*sizeof(int32_t));
+  param.parent_ids_->mutable_data(TARGET(kHost), param.parent_ids_->dims().production()*sizeof(int32_t));
   param.sequence_length_->Resize(sequence_length_dims);
-  param.sequence_length_->mutable_data(TARGET(kXPU), param.sequence_length_->dims().production()*sizeof(int32_t));
+  param.sequence_length_->mutable_data(TARGET(kHost), param.sequence_length_->dims().production()*sizeof(int32_t));
 
   DecodingKernel<float>(
     xpu_ctx,
@@ -1704,7 +1825,7 @@ REGISTER_LITE_KERNEL(fusion_decoding,
     .BindInput("SelfValueBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfValueWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("WordEmbedding", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
-    .BindOutput("OutputIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
-    .BindOutput("ParentIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
-    .BindOutput("SequenceLength", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
+    .BindOutput("OutputIds", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
+    .BindOutput("ParentIds", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
+    .BindOutput("SequenceLength", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
     .Finalize();
