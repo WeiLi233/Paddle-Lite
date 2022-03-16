@@ -18,6 +18,9 @@
 #include <algorithm>
 #include <cmath> // TOOD: remove in the future
 #include <vector> // TODO: ...
+
+#include <chrono>
+#include <thread>
 #include <climits>
 #include "lite/kernels/xpu/fusion_decoding_compute.h"
 #include "lite/backends/xpu/xpu_header_sitter.h"
@@ -1089,6 +1092,7 @@ public:
 
 
     for (uint step = 1; step <= args_.seq_len_; ++step) {
+      // VLOG(2) << "SSSTEP " << step;
       // we use two-way buffer
       int kv_cache_id = step & 0x1;
       // for debugging
@@ -1217,6 +1221,25 @@ public:
         } else {
           CHECK(false) << "is_fuse_topk_softMax == false not implemented.";
         }
+      }
+
+      // std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      if(args_.beam_width_ > 1) {
+        int decoder_max_seq_len = args_.seq_len_;
+        update_KV_cache_kernelLauncher_v2(
+            K_cache_,
+            V_cache_,
+            keep_alive_beam_ ? parent_ids_buf_ : decoding_params.parent_ids + (step - 1) * m,
+            keep_alive_beam_ ? alive_finished_buf_ : finished_buf_,
+            args_.batch_size_,
+            args_.beam_width_,
+            args_.head_num_,
+            args_.size_per_head_,
+            step,
+            decoder_max_seq_len,
+            cache_size,
+            args_.decoder_layers_,
+            (args_.prefix_lm_) ? args_.memory_max_seq_len_ : -1);
       }
     } // end step loop
   }
@@ -1350,7 +1373,7 @@ public:
             IoDirection::DtoH);
 
     float length_penalty = std::pow((5. + step + 1) / 6., alpha);
-    // float max_length_penalty = std::pow((5. + max_out_len + 1) / 6., alpha);
+    float max_length_penalty = std::pow((5. + max_out_len + 1) / 6., alpha);
 
     for(size_t bs=0; bs<batch_size; bs++) {
       T* output_cum_log_probs_ptr0 = h_output_cum_log_probs_ptr0->data() + bs * beam_width;
@@ -1368,6 +1391,8 @@ public:
 
       int32_t finish_num = 0;
       vector<TopKFinish<T>> finish_candidate(beam_width);
+      finish_candidate.reserve(beam_width * 2);
+
       if(step == 1) {
         for(size_t i=0; i<beam_width; i++) {
           finish_candidate[i].u = PL_FLT_MIN;
@@ -1387,9 +1412,9 @@ public:
       for(size_t i=0; i<beam_width*2; i++) {
         int32_t word_id = h_sorted_ind_beam_topk_ptr[h_sorted_ind_total_topk_ptr[i]];
         float cum_log_prob = h_sorted_value_total_topk_ptr[i];
-        int32_t beam_id = h_sorted_ind_total_topk_ptr[i] / (beam_width * 2);
+        int32_t beam_id = h_sorted_ind_total_topk_ptr[i] / (beam_width * 2) + bs * beam_width;
 
-        int32_t beam_id_in_output = bs * (beam_width * 2) + beam_id / beam_width + beam_width;
+        int32_t beam_id_in_output = bs * (beam_width * 2) + beam_id % beam_width + beam_width;
         if(word_id == end_id) {
           finish_candidate.push_back(TopKFinish<T>{cum_log_prob / length_penalty, beam_id_in_output, step});
           if (finish_num != beam_width) finish_num++;
@@ -1407,11 +1432,92 @@ public:
           alive_num++;
         }
       }
-    
+
+      std::sort(finish_candidate.begin(), finish_candidate.end(), 
+                [](TopKFinish<T> &a, TopKFinish<T>& b) {return a.u > b.u;});
+      
+      for(size_t i=0; i<beam_width; i++) {
+        output_word_ids_ptr[i] = end_id;
+        output_cum_log_probs_ptr0[i] = finish_candidate[i].u;
+        output_parent_ids_ptr[i] = finish_candidate[i].idx;
+        sequence_length_ptr[i] = finish_candidate[i].len;
+        finished_ptr[i] = finish_candidate[i].u > (PL_FLT_MIN + static_cast<T>(10.0f)) ? 1 : 0;
+      }
+
+      // early finish
+      float lowest_finish = finish_num == 0 ? PL_FLT_MIN : output_cum_log_probs_ptr0[finish_num - 1];
+      // The best possible score of the most likely alive sequence
+      
+      float lower_bound = (float)output_cum_log_probs_ptr1[0] / max_length_penalty;
+
+      if (step == max_out_len || lowest_finish > lower_bound) {  // when finishing
+        for (int i = 0; finish_num < beam_width; ++finish_num, ++i) {
+          output_word_ids_ptr[finish_num] = h_tmp_word_ids_buf_ptr[i];
+          output_cum_log_probs_ptr0[finish_num] = output_cum_log_probs_ptr1[i] / length_penalty;
+          output_parent_ids_ptr[finish_num] = output_parent_ids_ptr[i + beam_width];
+          sequence_length_ptr[finish_num] = step;
+          finished_ptr[finish_num] = 1;
+        }
+        // If early stop, also mark the alive beams finished.
+        for (int i = beam_width; i < beam_width*2; ++i) {
+          finished_ptr[i] = 1;
+          alive_finished_ptr[i - beam_width] = 1;
+        }
+      }
     } // end batch
+    /*
+    if(step == 1) {
+      std::cout << "parent id " << std::endl;
+      for(auto v : h_tmp_parent_ids_buf) {
+        std::cout << v << '\t';
+      }
+      std::cout << std::endl;
+    }
+    */
+    // sync cpu data to xpu
+    TargetWrapperXPU::MemcpySync(
+            word_ids_buf,
+            h_tmp_word_ids_buf.data(),
+            batch_size * beam_width * sizeof(int32_t), 
+            IoDirection::HtoD);
+    TargetWrapperXPU::MemcpySync(
+            parent_ids_buf,
+            h_tmp_parent_ids_buf.data(),
+            batch_size * beam_width * sizeof(int32_t), 
+            IoDirection::HtoD);
+    TargetWrapperXPU::MemcpySync(
+            finished,
+            h_temp_finished.data(),
+            batch_size * beam_width * sizeof(bool) * 2, 
+            IoDirection::HtoD);
+    TargetWrapperXPU::MemcpySync(
+            alive_finished,
+            h_temp_alive_finished.data(), 
+            batch_size * beam_width * sizeof(bool), 
+            IoDirection::HtoD);
+  } // end topK_softMax_update
 
 
-  }
+  void update_KV_cache_kernelLauncher_v2(T** key_cache,
+                                       T** value_cache,
+                                       const int* beam_ids,
+                                       const bool* finished,
+                                       const int batch_size,
+                                       const int beam_width,
+                                       const int head_num,
+                                       const int size_per_head,
+                                       const int step,
+                                       const int decoder_max_seq_len,
+                                       const int cache_size,
+                                       const int decoder_layers,
+                                       const int memory_max_seq_len = -1) {
+    if(memory_max_seq_len != -1) {
+      CHECK(false) << "memory_max_seq_len = -1 not implemented.";
+    }
+    //int src_id = step & 0x1;
+    //int tgt_id = 1 - src_id;
+    //int tmp_len = (memory_max_seq_len != -1) ? step + memory_max_seq_len : step;
+  } // end update_KV_cache_kernelLauncher_v2
 
   virtual ~DecodingBeamsearch() {
     delete[] K_cache_;
