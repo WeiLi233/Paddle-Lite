@@ -468,29 +468,132 @@ public:
       xdnn::Activation_t::LINEAR); /* act_type */
       CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
       
+      // lite::Tensor qkv_tensor;
+      // qkv_tensor.Resize({m,hidden_units_});
+      lite::Tensor tmp_float_finish; // TODO: 为了适应xdnn api的接口，keep_alive_beam_ 应该是float 类型，就避免了cast的步骤，这里先打个补丁绕过去
+      tmp_float_finish.Resize({m, step});
+      xdnn_ret = xdnn::constant<float>(
+                            ctx_, 
+                            tmp_float_finish.mutable_data<float>(TARGET(kXPU), tmp_float_finish.dims().production()*sizeof(float)),
+                            m * step,
+                            0.0f);
+      CHECK_EQ(xdnn_ret, false) << "constant error!";
+      lite::Tensor sliced_q;
+      sliced_q.Resize({m, n});
+      lite::Tensor sliced_k;
+      sliced_k.Resize({m, n});
+      lite::Tensor sliced_v;
+      sliced_v.Resize({m, n});
+      xdnn_ret = xdnn::slice<float>(ctx_,
+                                query_buf_,
+                                sliced_q.mutable_data<float>(TARGET(kXPU), sliced_q.dims().production() * sizeof(float)),
+                                {m, n*3},
+                                {0, 0},
+                                {m, n});
+      CHECK_EQ(xdnn_ret, false) << "slice error1!";
+      xdnn_ret = xdnn::slice<float>(ctx_,
+                                query_buf_,
+                                sliced_k.mutable_data<float>(TARGET(kXPU), sliced_k.dims().production() * sizeof(float)),
+                                {m, n*3},
+                                {0, n},
+                                {m, n*2});
+      CHECK_EQ(xdnn_ret, false) << "slice error2!";
+      xdnn_ret = xdnn::slice<float>(ctx_,
+                                query_buf_,
+                                sliced_v.mutable_data<float>(TARGET(kXPU), sliced_v.dims().production() * sizeof(float)),
+                                {m, n*3},
+                                {0, n*2},
+                                {m, n*3});
+      CHECK_EQ(xdnn_ret, false) << "slice error3!";
+      lite::Tensor broadcast_q;
+      broadcast_q.Resize({m, max_seq_len, n});
+      xdnn_ret = xdnn::broadcast<float>(ctx_, 
+                            sliced_q.data<float>(),
+                            broadcast_q.mutable_data<float>(TARGET(kXPU), broadcast_q.dims().production() * sizeof(float)),
+                            {m, 1, n},
+                            {m, step, n});
+      CHECK_EQ(xdnn_ret, false) << "broad ccast error.";
+
+      if(step == 1) {
+        // XPU_CALL(xpu_memcpy(key_cache_,
+        //                   sliced_k.data<float>(),
+        //                  sliced_k.dims().production() * sizeof(float),
+        //                   XPU_DEVICE_TO_DEVICE));
+        xdnn_ret = xdnn::copy<float>(ctx_,
+                          sliced_k.data<float>(),
+                          key_cache_,
+                          sliced_k.dims().production());
+        // XPU_CALL(xpu_memcpy(value_cache_,
+        //                  sliced_v.data<float>(),
+        //                  sliced_v.dims().production() * sizeof(float),
+        //                  XPU_DEVICE_TO_DEVICE));
+        xdnn_ret = xdnn::copy<float>(ctx_,
+                          sliced_v.data<float>(),
+                          value_cache_,
+                          sliced_v.dims().production());
+      } else {
+        lite::Tensor tmp_transpose_key_cache;
+        tmp_transpose_key_cache.Resize({step, m, n});
+        xdnn_ret = xdnn::transpose<float>(ctx_,
+                            key_cache_,
+                            tmp_transpose_key_cache.mutable_data<float>(TARGET(kXPU), tmp_transpose_key_cache.dims().production()*sizeof(float)),
+                            {m,step-1,n},
+                            {1,0,2});
+        //XPU_CALL(xpu_memcpy(
+        //            tmp_transpose_key_cache.mutable_data<float>() + m*n*(step-1),
+        //            sliced_k.data<float>(),
+        //            sliced_k.dims().production() * sizeof(float),
+        //            XPU_DEVICE_TO_DEVICE));
+        xdnn_ret = xdnn::copy<float>(ctx_,
+                          sliced_k.data<float>(),
+                          tmp_transpose_key_cache.mutable_data<float>() + m*n*(step-1),
+                          sliced_k.dims().production());
+        xdnn_ret = xdnn::transpose<float>(ctx_,
+                            tmp_transpose_key_cache.data<float>(),
+                            key_cache_,
+                            {m,step-1,n},
+                            {1,0,2});
+
+        lite::Tensor tmp_transpose_value_cache;
+        tmp_transpose_value_cache.Resize({step, m, n});
+        xdnn_ret = xdnn::transpose<float>(ctx_,
+                            value_cache_,
+                            tmp_transpose_value_cache.mutable_data<float>(TARGET(kXPU), tmp_transpose_value_cache.dims().production()*sizeof(float)),
+                            {m,step-1,n},
+                            {1,0,2});
+        // XPU_CALL(xpu_memcpy(
+        //            tmp_transpose_value_cache.mutable_data<float>() + m*n*(step-1),
+        //            sliced_v.data<float>(),
+        //            sliced_v.dims().production() * sizeof(float),
+        //            XPU_DEVICE_TO_DEVICE));
+        xdnn_ret = xdnn::copy<float>(ctx_,
+                          sliced_v.data<float>(),
+                          tmp_transpose_value_cache.mutable_data<float>() + m*n*(step-1),
+                          sliced_v.dims().production());
+        xdnn_ret = xdnn::transpose<float>(ctx_,
+                            tmp_transpose_value_cache.data<float>(),
+                            value_cache_,
+                            {m,step-1,n},
+                            {1,0,2});
+      }
+
+      lite::Tensor qk_tensor;
+      qk_tensor.Resize({m,head_num_, 1, step});
+
       xdnn::QKVAttnParam qkv_attn_param(m, 
                                       1, 
                                       head_num_,
                                       size_per_head_,
-                                      {m,1,1,1},
+                                      {m,1,1,step},
                                       xdnn::Activation_t::RELU,
                                       0,
-                                      true);
-      lite::Tensor qk_tensor;
-      qk_tensor.Resize({m,head_num_, 1, 1});
-      // lite::Tensor qkv_tensor;
-      // qkv_tensor.Resize({m,hidden_units_});
-      lite::Tensor tmp_float_finish; // TODO: 为了适应xdnn api的接口，keep_alive_beam_ 应该是float 类型，就避免了cast的步骤，这里先打个补丁绕过去
-      tmp_float_finish.Resize({m,1});
-      xdnn_ret = xdnn::cast_v2<bool, float>(
-                            ctx_, 
-                            finished, 
-                            tmp_float_finish.mutable_data<float>(TARGET(kXPU), tmp_float_finish.dims().production()*sizeof(float)), 
-                            m);
+                                      false);
+
+
       xdnn_ret = xdnn::qk_attention<float, float, float, int32_t>(
           ctx_,
-          query_buf_,
-          query_buf_ + hidden_units_,
+          sliced_q.data<float>(),
+          key_cache_,
           qk_tensor.mutable_data<float>(TARGET(kXPU), qk_tensor.dims().production() * sizeof(float)),
           nullptr,
           nullptr,
@@ -501,7 +604,7 @@ public:
       xdnn_ret = xdnn::qk_v_attention<float, float, float, int32_t>(
           ctx_,
           qk_tensor.data<float>(),
-          query_buf_ + hidden_units_ * 2,
+          value_cache_,
           context_buf_, //qkv_tensor.mutable_data<float>(TARGET(kXPU), qkv_tensor.dims().production() * sizeof(float)),
           nullptr,
           nullptr,
@@ -510,6 +613,8 @@ public:
     } else {
       CHECK(false) << "NOT IMPLEMENTEDD.";
     }
+
+    
 
     xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
       ctx_, /* context */
@@ -637,7 +742,7 @@ public:
             tmp_float_finish.mutable_data<float>(TARGET(kXPU), tmp_float_finish.dims().production()*sizeof(float)), 
             tmp_float_finish_cpu.data(), 
             tmp_float_finish_cpu.size()*sizeof(int32_t), 
-            IoDirection::HtoD);  
+            IoDirection::HtoD);
     xdnn::QKVAttnParam qkv_attn_param(m, 
                                       max_seq_len, 
                                       head_num_,
@@ -1514,9 +1619,33 @@ public:
     if(memory_max_seq_len != -1) {
       CHECK(false) << "memory_max_seq_len = -1 not implemented.";
     }
-    //int src_id = step & 0x1;
-    //int tgt_id = 1 - src_id;
-    //int tmp_len = (memory_max_seq_len != -1) ? step + memory_max_seq_len : step;
+    /*
+    std::vector<int32_t>  h_beam(batch_size*beam_width);
+    TargetWrapperXPU::MemcpySync(
+            h_beam.data(), 
+            beam_ids, 
+            batch_size * beam_width * sizeof(int32_t), 
+            IoDirection::DtoH); 
+    */
+    int src_id = step & 0x1;
+    int tgt_id = 1 - src_id;
+    int32_t xdnn_ret;
+    xdnn_ret = xdnn::gather<float, int32_t>(ctx_,
+            key_cache[src_id],
+            beam_ids,
+            key_cache[tgt_id],
+            {batch_size*beam_width, step, head_num*size_per_head},
+            batch_size*beam_width,
+            0);
+    CHECK_EQ(xdnn_ret, false) << "Gather k_cache error.";
+    xdnn_ret = xdnn::gather<float, int32_t>(ctx_,
+            value_cache[src_id],
+            beam_ids,
+            value_cache[tgt_id],
+            {batch_size*beam_width, step, head_num*size_per_head},
+            batch_size*beam_width,
+            0);
+    CHECK_EQ(xdnn_ret, false) << "Gather v_cache error.";
   } // end update_KV_cache_kernelLauncher_v2
 
   virtual ~DecodingBeamsearch() {
