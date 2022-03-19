@@ -551,7 +551,7 @@ public:
         xdnn_ret = xdnn::transpose<float>(ctx_,
                             tmp_transpose_key_cache.data<float>(),
                             key_cache_,
-                            {m,step-1,n},
+                            {step,m,n},
                             {1,0,2});
 
         lite::Tensor tmp_transpose_value_cache;
@@ -573,7 +573,7 @@ public:
         xdnn_ret = xdnn::transpose<float>(ctx_,
                             tmp_transpose_value_cache.data<float>(),
                             value_cache_,
-                            {m,step-1,n},
+                            {step,m,n},
                             {1,0,2});
       }
 
@@ -581,7 +581,7 @@ public:
       qk_tensor.Resize({m,head_num_, 1, step});
 
       xdnn::QKVAttnParam qkv_attn_param(m, 
-                                      1, 
+                                      step, 
                                       head_num_,
                                       size_per_head_,
                                       {m,1,1,step},
@@ -614,7 +614,31 @@ public:
       CHECK(false) << "NOT IMPLEMENTEDD.";
     }
 
-    
+
+    if(step == 1 || step == 2) {
+      vector<float> tmp_v_cache(m*step*n);
+      vector<float> tmp_context(m*n);
+      TargetWrapperXPU::MemcpySync(
+                        tmp_context.data(),
+                        context_buf_, 
+                        m*n*sizeof(float), 
+                        IoDirection::DtoH); 
+      TargetWrapperXPU::MemcpySync(
+                        tmp_v_cache.data(),
+                        value_cache_, 
+                        m*n*step*sizeof(float), 
+                        IoDirection::DtoH); 
+      cout << "V_CACHE STEP = " << step << endl;
+      for(int xx=0; xx<tmp_v_cache.size(); xx++) {
+        cout << xx << '\t' << tmp_v_cache[xx] << endl;
+      }
+      cout << "CONTEXT STEP = " << step << endl;
+      for(auto v:tmp_context) {
+        cout << v << '\t';
+      }
+      cout << endl;
+
+    }
 
     xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
       ctx_, /* context */
@@ -1200,6 +1224,18 @@ public:
       // VLOG(2) << "SSSTEP " << step;
       // we use two-way buffer
       int kv_cache_id = step & 0x1;
+      if(step == 2) {
+        vector<int32_t> h_word_buf(args_.batch_size_ * args_.beam_width_);
+        TargetWrapperXPU::MemcpySync(
+            h_word_buf.data(), 
+            word_ids_buf_, 
+            args_.batch_size_ * args_.beam_width_ * sizeof(int32_t), 
+            IoDirection::DtoH); 
+        cout << "STEP2 WORD IND " << endl;
+        for(auto w: h_word_buf) {
+          cout << w << endl;
+        }
+      }
       // for debugging
       // call embedding_lookup_sine_position_encoding_kernel_launcher()
       xdnn_ret = xdnn::embedding<float, int32_t>(
@@ -1630,22 +1666,24 @@ public:
     int src_id = step & 0x1;
     int tgt_id = 1 - src_id;
     int32_t xdnn_ret;
-    xdnn_ret = xdnn::gather<float, int32_t>(ctx_,
-            key_cache[src_id],
-            beam_ids,
-            key_cache[tgt_id],
-            {batch_size*beam_width, step, head_num*size_per_head},
-            batch_size*beam_width,
-            0);
-    CHECK_EQ(xdnn_ret, false) << "Gather k_cache error.";
-    xdnn_ret = xdnn::gather<float, int32_t>(ctx_,
-            value_cache[src_id],
-            beam_ids,
-            value_cache[tgt_id],
-            {batch_size*beam_width, step, head_num*size_per_head},
-            batch_size*beam_width,
-            0);
-    CHECK_EQ(xdnn_ret, false) << "Gather v_cache error.";
+    for(size_t layer=0; layer<decoder_layers; layer++) {
+      xdnn_ret = xdnn::gather<float, int32_t>(ctx_,
+              key_cache[src_id] + layer * cache_size,
+              beam_ids,
+              key_cache[tgt_id] + layer * cache_size,
+              {batch_size*beam_width, step, head_num*size_per_head},
+              batch_size*beam_width,
+              0);
+      CHECK_EQ(xdnn_ret, false) << "Gather k_cache error.";
+      xdnn_ret = xdnn::gather<float, int32_t>(ctx_,
+              value_cache[src_id] + layer * cache_size,
+              beam_ids,
+              value_cache[tgt_id] + layer * cache_size,
+              {batch_size*beam_width, step, head_num*size_per_head},
+              batch_size*beam_width,
+              0);
+      CHECK_EQ(xdnn_ret, false) << "Gather v_cache error.";
+    }
   } // end update_KV_cache_kernelLauncher_v2
 
   virtual ~DecodingBeamsearch() {
