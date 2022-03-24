@@ -13,40 +13,42 @@
 // limitations under the License.
 
 #include <vector>
-#include <fstream>
+#include <fstream> // TODO: remove in the future
 #include <memory>
 #include <algorithm>
+#include <array>
 #include <cmath> // TOOD: remove in the future
 #include <vector> // TODO: ...
-
 #include <chrono>
-#include <thread>
-#include <climits>
 #include "lite/kernels/xpu/fusion_decoding_compute.h"
 #include "lite/backends/xpu/xpu_header_sitter.h"
 #include "lite/core/op_registry.h"
 
-using namespace std;
+using std::cout;
+using std::endl;
+using std::vector;
+using std::array;
+using std::ifstream;
 
 namespace paddle {
 namespace lite {
 namespace kernels {
 namespace xpu {
 
-static constexpr int MAX_K = 4;
-static constexpr int SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS = 128;
-static constexpr float PL_FLT_MIN = -1e20;
+static constexpr int32_t MAX_K = 4;
+static constexpr int32_t SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS = 128;
+static constexpr float PLITE_FLT_MIN = -1e20;
 
 template<typename T>
 struct DenseWeight{
-    const T* kernel = nullptr;
-    const T* bias = nullptr;
+    const T* kernel{};
+    const T* bias{};
 };
 
 template<typename T>
 struct LayerNormWeight{
-    const T* gamma = nullptr;
-    const T* beta = nullptr;
+    const T* gamma{};
+    const T* beta{};
 };
 
 template<typename T>
@@ -67,36 +69,33 @@ template <typename T>
 class DecodingInitParam {
 public:
   /* weights for masked_multi_head_attention */
-  const T *embedding_table = nullptr;
-  const T *embedding_kernel = nullptr;
-  const T *embedding_bias = nullptr;
+  const T *embedding_table{};
+  const T *embedding_kernel{};
+  const T *embedding_bias{};
 
   // Used for unilm.
-  const T *trans_kernel = nullptr;
-  const T *trans_bias = nullptr;
+  const T *trans_kernel{};
+  const T *trans_bias{};
 
-  const T *memory_tensor = nullptr;
-  const int32_t *type_id = nullptr;
-  const int32_t *memory_sequence_length = nullptr;
+  const T *memory_tensor{};
+  const int32_t *type_id{};
+  const int32_t *memory_sequence_length{};
 
   // Used for force decoding.
   /// const int32_t *trg_word = nullptr; // TODO: temporarily unseles
   /// const int32_t *trg_length = nullptr;
 
-  const T *position_encoding_table = nullptr;
+  const T *position_encoding_table{};
 
   // segment table
-  const T *type_table = nullptr;
+  const T *type_table{};
 
   LayerNormWeight<T> layernorm;
-  LayerNormWeight<T> lm_layernorm;
-  LayerNormWeight<T> mbart_layernorm;
 
-  const T *logits_mask = nullptr;
-
-  int32_t *output_ids = nullptr;
-  int32_t *parent_ids = nullptr;
-  int32_t *sequence_length = nullptr;
+  const T *logits_mask{};
+  int32_t *output_ids{};
+  int32_t *parent_ids{};
+  int32_t *sequence_length{};
 };
 
 template <typename T>
@@ -112,66 +111,50 @@ public:
 
   LayerNormWeight<T> ffn_layernorm;
   FFNWeight<T> ffn;
-  /*
-  cublasHandle_t cublas_handle;
-  cublasLtHandle_t cublaslt_handle;
-  cudaStream_t stream;
-  */
 
-  int request_batch_size = -1;
-  int request_max_mem_seq_len = -1;
+  int32_t request_batch_size = -1;
+  int32_t request_max_mem_seq_len = -1;
 
-  const float *k_cache = nullptr;
-  const float *v_cache = nullptr;
+  //const float *k_cache = nullptr;
+  //const float *v_cache = nullptr;
 };
 
 struct TransformerArguments {
-  size_t batch_size_;
-  size_t seq_len_;
-  size_t head_num_;
-  size_t size_per_head_;
-  size_t hidden_units_;
+  int32_t batch_size_;
+  int32_t seq_len_;
+  int32_t head_num_;
+  int32_t size_per_head_;
+  int32_t hidden_units_;
 };
 
 struct DecodingArguments : public TransformerArguments {
-  int decoder_layers_;
-  int vocab_size_;
-  int start_id_;
-  int end_id_;
-  int vocab_size_padded_;
+  int32_t decoder_layers_;
+  int32_t vocab_size_;
+  int32_t start_id_;
+  int32_t end_id_;
+  int32_t vocab_size_padded_;
 };
 
 struct DecodingBeamsearchArguments : public DecodingArguments{
-  int beam_width_;
-  int temp_storage_size_;
+  int32_t beam_width_;
+  int32_t temp_storage_size_;
   float beam_search_diversity_rate_;
   float alpha_;  // power number for length penalty in beam search v2
   bool normalization_before_{true};
-  int pos_offset_{0};     // For BART position embedding
+  int32_t pos_offset_{0};     // For BART position embedding
   bool pos_bias_{false};  // For Unified position embedding
   // ActivationType act_{ActivationType::RELU};
 
-  int memory_max_seq_len_{0};
+  int32_t memory_max_seq_len_{0};
   bool prefix_lm_{false};
-  int finished_candidate_num_{-1};
+  int32_t finished_candidate_num_{-1};
   bool early_stopping_{false};
   bool is_mbart_{false};
 };
 
-template <typename T>
-static inline std::vector<const T*> prepare_weight(
-    const std::vector<const lite::Tensor*>& tensor_weight) {
-  std::vector<const T*> xdnn_weight;
-  for (auto* t: tensor_weight) {
-    xdnn_weight.push_back(t->data<float>());
-  }
-  return xdnn_weight;
-}
-
-struct TensorParallelParam 
-{
-  int local_head_num_{0};
-  int local_hidden_units_{0};
+struct TensorParallelParam {
+  int32_t local_head_num_{0};
+  int32_t local_hidden_units_{0};
 };
 
 template <typename T>
@@ -186,105 +169,131 @@ template <typename T>
 class OpenDecoder {
   baidu::xpu::api::Context *ctx_;
   const DecoderInitParam<T> *param_;
-  TensorParallelParam t_parallel_param_;
 
-  int max_batch_size_ = -1;
-  int head_num_;
-  int size_per_head_;
-  int hidden_units_;
-  int memory_hidden_units_;
-  bool is_fuse_QKV_in_batched_gemm_;
-  bool is_fuse_QKV_in_normal_gemm_;
-  int normalization_before_;
+  int32_t max_batch_size_ = -1;
+  int32_t head_num_{};
+  int32_t size_per_head_{};
+  int32_t hidden_units_{};
+  int32_t memory_hidden_units_{};
+  int32_t od_mem_len_{}; // od is short for OpenDecoder
+  int32_t od_seq_len_{};
+  bool is_fuse_QKV_in_batched_gemm_{};
+  bool is_fuse_QKV_in_normal_gemm_{};
+  bool normalization_before_{};
   /// ActivationType act_;
 
   T *norm_from_tensor_buf_{}, *query_buf_{};
   T *context_buf_{}, *masked_output_buf_{};
   T *norm_masked_output_buf_{}, *cross_output_buf_{};
-  T *norm_cross_output_buf_{}, *ffn_inner_buf_{}, *ffn_out_buf_{};
-  T *key_buf_{}, *value_buf_{};
+  T *norm_cross_output_buf_{}, *ffn_inner_buf_{};
+  // T *ffn_out_buf_{};
+  T *key_buf_{}, *value_buf_{}; //useless...
+  T *sliced_q_{}, *sliced_k_{}, *sliced_v_{}; // [max_batch, hidden_dim]
+  T *broadcast_q_{}; // [max_batch, max_seq, hidden_dim]
+  T *transpose_kv_buf_{}; // [max_batch, max_seq, hidden_dim]
+  T *qk_buffer_{}; // [max_batch, head_num, 1, max_seq], self 和cross 可以共用
 
-  T **qkv_kernel_{};
-  T **qkv_input_{};
-  T **qkv_buf_{};
-
+  float *self_mask_{}; // [max_batch, max_seq]
+  float *cross_mask_{}; // [max_batch, max_mem_seq]
+  // self_mask_只是为了适配qk_attention api，fill all 0就可以，但cross_mask_需要根据输入更新，因此不能复用
 
 public:
   OpenDecoder(baidu::xpu::api::Context *ctx,
-              int head_num,
-              int size_per_head,
-              int memory_hidden_units,
+              int32_t head_num,
+              int32_t size_per_head,
+              int32_t memory_hidden_units,
               bool is_fuse_QKV_in_normal_gemm = false,
               bool normalization_before = true)
       : ctx_(ctx),
         head_num_(head_num),
         size_per_head_(size_per_head),
+        hidden_units_(head_num * size_per_head),
         memory_hidden_units_(memory_hidden_units),
         is_fuse_QKV_in_normal_gemm_(is_fuse_QKV_in_normal_gemm),
-        normalization_before_(normalization_before) {
-    hidden_units_ = head_num_ * size_per_head_;
-    t_parallel_param_.local_head_num_ = head_num_;
-    t_parallel_param_.local_hidden_units_ = hidden_units_;
-  }
+        normalization_before_(normalization_before) {};
   
-  inline void set_max_batch_size(int batch_size) {
+  inline void set_max_batch_size(const int32_t batch_size) {
     max_batch_size_ = batch_size;
   }
-
-  int getWorkspaceSize() {
-    return 13 * max_batch_size_ * hidden_units_ + sizeof(T *) * 9;
+  inline void set_max_mem_length(const int32_t memory_length) {
+    od_mem_len_ = memory_length;
+  }
+  inline void set_max_seq_length(const int32_t sequence_length) {
+    od_seq_len_ = sequence_length;
   }
 
-  void initialize(const DecoderInitParam<T> &param, T *buf) {
+  int32_t getWorkspaceSize() {
+    CHECK_NE(od_mem_len_, 0) << "od_mem_len_ can not be 0, bug occurs.";
+    CHECK_NE(od_seq_len_, 0) << "od_seq_len_ can not be 0, bug occurs.";
+    // Check OpenDecoder::initialize() to see why magic number 13 appears
+    // return 13 * max_batch_size_ * hidden_units_ + sizeof(T*) * 9;
+    return (13 + 3 + od_seq_len_* 2) * max_batch_size_ * hidden_units_ 
+            + ((head_num_ + 1) * od_seq_len_ + od_mem_len_) * max_batch_size_;
+    
+  }
+
+  void initialize(const DecoderInitParam<T>& param, T* buf) {
     param_ = &param;
-    const int buf_size = max_batch_size_ * hidden_units_;
+    const int32_t buf_size = max_batch_size_ * hidden_units_;
 
     norm_from_tensor_buf_ = buf;
-    ffn_out_buf_ = buf;
-    query_buf_ = buf + buf_size;  // store the query values (from_tensor * Q) in
+    // ffn_out_buf_          = buf;
+    query_buf_            = buf + buf_size;  // store the query values (from_tensor * Q) in
                                   // both masked and multi-head attention
-    key_buf_ = query_buf_ + buf_size;
-    value_buf_ = key_buf_ + buf_size;
-    context_buf_ = value_buf_ + buf_size;  // store the context result
+    key_buf_      = query_buf_ + buf_size;
+    value_buf_    = key_buf_ + buf_size;
+    context_buf_  = value_buf_ + buf_size;  // store the context result
                                            // (softmax(qk)v) in both masked and
                                            // multi-head attention
 
-    masked_output_buf_ = context_buf_ + buf_size;  // masked_attention_output
-    norm_masked_output_buf_ =
-        masked_output_buf_ + buf_size;  // norm(masked_attention_output)
-
-    cross_output_buf_ =
-        norm_masked_output_buf_ + buf_size;  // mutli-head attention_output
-    norm_cross_output_buf_ =
-        cross_output_buf_ + buf_size;  // norm(multi-head attention_output)
-    ffn_inner_buf_ =
-        norm_cross_output_buf_ + buf_size;  // 4 buf size to store inner product
-
-    qkv_kernel_ = (T **)(ffn_inner_buf_ + 4 * buf_size);
-    qkv_input_ = qkv_kernel_ + 3;
-    qkv_buf_ = qkv_input_ + 3;
+    masked_output_buf_      = context_buf_ + buf_size;  // masked_attention_output
+    norm_masked_output_buf_ = masked_output_buf_ + buf_size;  // norm(masked_attention_output)
+    cross_output_buf_       = norm_masked_output_buf_ + buf_size;  // mutli-head attention_output
+    norm_cross_output_buf_  = cross_output_buf_ + buf_size;  // norm(multi-head attention_output)
+    ffn_inner_buf_          = norm_cross_output_buf_ + buf_size;  // 4 buf size to store inner product
+    
+    sliced_q_               = ffn_inner_buf_ + 4 * buf_size;
+    sliced_k_               = sliced_q_ + buf_size;
+    sliced_v_               = sliced_k_ + buf_size;
+    broadcast_q_            = sliced_v_ + buf_size;
+    transpose_kv_buf_       = broadcast_q_ + buf_size * od_seq_len_;
+    qk_buffer_              = transpose_kv_buf_ + buf_size * od_seq_len_;
+    self_mask_              = qk_buffer_ + max_batch_size_ * head_num_ * od_seq_len_;
+    cross_mask_             = self_mask_ + max_batch_size_ * od_seq_len_;
   }
 
-  void forward(const T *from_tensor,
-               const T *memory_tensor,
-               T *key_cache_,
-               T *value_cache_,
-               T *key_mem_cache_,
-               T *value_mem_cache_,
-               const int *memory_sequence_length,
-               T *decoder_output,
-               const int step,
-               const int decoder_max_seq_len,
+  void forward(const T* from_tensor,
+               const T* memory_tensor,
+               T* key_cache_,
+               T* value_cache_,
+               T* key_mem_cache_,
+               T* value_mem_cache_,
+               const int* memory_sequence_length,
+               T* decoder_output,
+               const int32_t step,
+               const int32_t decoder_max_seq_len,
                const bool is_cross_attention,
-               const bool *finished = nullptr,
-               const int memory_max_seq_len = -1) {
-    
-    int xdnn_ret;
+               const bool* finished = nullptr,
+               const int32_t memory_max_seq_len = -1) {
+    /*
+    if(step == 2) {
+        const int32_t dbg_len = max_batch_size_ * 1024;
+        vector<float> mask_cpu(dbg_len);
+        TargetWrapperXPU::MemcpySync(
+            mask_cpu.data(), from_tensor, dbg_len*sizeof(float), IoDirection::DtoH); 
+        std::cout << "from tensor step = " << step << std::endl;
+        for(int32_t x=0; x<dbg_len; x+=200) {
+          std::cout << x << '\t' << mask_cpu[x] << std::endl;
+        }
+        std::cout << std::endl;
+    }
+    */
+    int32_t xdnn_ret;
     xdnn_ret = xdnn::layer_norm<float>(ctx_,    
                            from_tensor, 
                            norm_from_tensor_buf_,
                            max_batch_size_,
-                           t_parallel_param_.local_hidden_units_,
+                           hidden_units_,
                            1e-6f,
                            param_->self_layernorm.gamma,
                            param_->self_layernorm.beta,
@@ -304,16 +313,16 @@ public:
     }
 
     if(is_cross_attention) {
-      xdnn_ret = xdnn::add<float>(ctx_, 
+      xdnn_ret = xdnn::add<T>(ctx_, 
                           from_tensor, 
                           masked_output_buf_, 
                           masked_output_buf_,
                           max_batch_size_ * hidden_units_);
-      xdnn_ret = xdnn::layer_norm<float>(ctx_,    
+      xdnn_ret = xdnn::layer_norm<T>(ctx_,    
                            masked_output_buf_, 
                            norm_masked_output_buf_,
                            max_batch_size_,
-                           t_parallel_param_.local_hidden_units_,
+                           hidden_units_,
                            1e-6f,
                            param_->cross_layernorm.gamma,
                            param_->cross_layernorm.beta,
@@ -322,12 +331,12 @@ public:
       CHECK_EQ(xdnn_ret, 0) << "norm masked layer norm error.";
       /*
       if(step == 1) {
-        const int dbg_len = max_batch_size_ * 1024;
+        const int32_t dbg_len = max_batch_size_ * 1024;
         vector<float> mask_cpu(dbg_len);
         TargetWrapperXPU::MemcpySync(
             mask_cpu.data(), norm_masked_output_buf_, dbg_len*sizeof(float), IoDirection::DtoH); 
         std::cout << "norm mask out" << std::endl;
-        for(int x=0; x<dbg_len; x+=1000) {
+        for(int32_t x=0; x<dbg_len; x+=1000) {
           std::cout << mask_cpu[x] << std::endl;
         }
         std::cout << std::endl;
@@ -342,16 +351,16 @@ public:
                                   finished,
                                   param_->request_max_mem_seq_len,
                                   step);
-      xdnn_ret = xdnn::add<float>(ctx_, 
+      xdnn_ret = xdnn::add<T>(ctx_, 
                           masked_output_buf_, 
                           cross_output_buf_, 
                           cross_output_buf_,
                           max_batch_size_ * hidden_units_);
-      xdnn_ret = xdnn::layer_norm<float>(ctx_,    
+      xdnn_ret = xdnn::layer_norm<T>(ctx_,    
                            cross_output_buf_, 
                            norm_cross_output_buf_,
                            max_batch_size_,
-                           t_parallel_param_.local_hidden_units_,
+                           hidden_units_,
                            1e-6f,
                            param_->ffn_layernorm.gamma,
                            param_->ffn_layernorm.beta,
@@ -360,9 +369,9 @@ public:
       CHECK_EQ(xdnn_ret, 0) << "norm_cross_output_buf_ layer norm error.";
 
       // start ffn()
-      int m = max_batch_size_;
-      int n = t_parallel_param_.local_hidden_units_;
-      xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+      int32_t m = max_batch_size_;
+      int32_t n = hidden_units_;
+      xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
           ctx_, /* context */
           norm_cross_output_buf_,          /* x */
           param_->ffn.intermediate_weight.kernel,
@@ -384,7 +393,7 @@ public:
           xdnn::Activation_t::RELU); /* act_type */
           CHECK_EQ(xdnn_ret, 0) << "calling ffn fc_fusion error!.";
 
-      xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+      xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
           ctx_, /* context */
           ffn_inner_buf_,          /* x */
           param_->ffn.output_weight.kernel,
@@ -406,7 +415,7 @@ public:
           xdnn::Activation_t::LINEAR); /* act_type */
       CHECK_EQ(xdnn_ret, 0) << "calling ffn fc_fusion error!.";
 
-      xdnn_ret = xdnn::add<float>(ctx_, 
+      xdnn_ret = xdnn::add<T>(ctx_, 
                           decoder_output, 
                           cross_output_buf_, 
                           decoder_output,
@@ -414,12 +423,12 @@ public:
       CHECK_EQ(xdnn_ret, 0) << "calling ffn add error!.";
       /*
       if(step == 1) {
-        const int dbg_len = max_batch_size_ * 1024;
+        const int32_t dbg_len = max_batch_size_ * 1024;
         vector<float> m_cpu(dbg_len);
         TargetWrapperXPU::MemcpySync(
             m_cpu.data(), decoder_output, dbg_len*sizeof(float), IoDirection::DtoH);
         std::cout << "decoder_output out" << std::endl;
-        for(int x=0; x<dbg_len; x+=500) {
+        for(int32_t x=0; x<dbg_len; x+=500) {
           std::cout << m_cpu[x] << ' ';
         }
         std::cout << std::endl;
@@ -433,20 +442,18 @@ public:
   }
 
   void masked_multi_head_attention(const T *from_tensor,
-                                   T *key_cache_,
-                                   T *value_cache_,
+                                   T *key_cache,
+                                   T *value_cache,
                                    T *decoder_output,
                                    const bool *finished,
-                                   const int step,
-                                   const int max_seq_len) {
-    
-    int m = max_batch_size_;
-    int n = t_parallel_param_.local_hidden_units_;
-    // int k = hidden_units_;
+                                   const int32_t step,
+                                   const int32_t max_seq_len) {
+    int32_t m = max_batch_size_;
+    int32_t n = hidden_units_;
 
-    int xdnn_ret;
+    int32_t xdnn_ret;
     if (is_fuse_QKV_in_normal_gemm_ == true) {
-      xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+      xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
       ctx_, /* context */
       from_tensor,          /* x */
       param_->self_attention.query_weight.kernel,
@@ -468,117 +475,90 @@ public:
       xdnn::Activation_t::LINEAR); /* act_type */
       CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
       
-      // lite::Tensor qkv_tensor;
-      // qkv_tensor.Resize({m,hidden_units_});
-      lite::Tensor tmp_float_finish; // TODO: 为了适应xdnn api的接口，keep_alive_beam_ 应该是float 类型，就避免了cast的步骤，这里先打个补丁绕过去
-      tmp_float_finish.Resize({m, step});
-      xdnn_ret = xdnn::constant<float>(
-                            ctx_, 
-                            tmp_float_finish.mutable_data<float>(TARGET(kXPU), tmp_float_finish.dims().production()*sizeof(float)),
-                            m * step,
-                            0.0f);
-      CHECK_EQ(xdnn_ret, false) << "constant error!";
-      lite::Tensor sliced_q;
-      sliced_q.Resize({m, n});
-      lite::Tensor sliced_k;
-      sliced_k.Resize({m, n});
-      lite::Tensor sliced_v;
-      sliced_v.Resize({m, n});
-      xdnn_ret = xdnn::slice<float>(ctx_,
+      xdnn_ret = xdnn::slice<T>(ctx_,
                                 query_buf_,
-                                sliced_q.mutable_data<float>(TARGET(kXPU), sliced_q.dims().production() * sizeof(float)),
+                                sliced_q_,
                                 {m, n*3},
                                 {0, 0},
                                 {m, n});
-      CHECK_EQ(xdnn_ret, false) << "slice error1!";
-      xdnn_ret = xdnn::slice<float>(ctx_,
+      CHECK_EQ(xdnn_ret, false) << "slice query error!";
+      xdnn_ret = xdnn::slice<T>(ctx_,
                                 query_buf_,
-                                sliced_k.mutable_data<float>(TARGET(kXPU), sliced_k.dims().production() * sizeof(float)),
+                                sliced_k_,
                                 {m, n*3},
                                 {0, n},
                                 {m, n*2});
-      CHECK_EQ(xdnn_ret, false) << "slice error2!";
-      xdnn_ret = xdnn::slice<float>(ctx_,
+      CHECK_EQ(xdnn_ret, false) << "slice key error!";
+      xdnn_ret = xdnn::slice<T>(ctx_,
                                 query_buf_,
-                                sliced_v.mutable_data<float>(TARGET(kXPU), sliced_v.dims().production() * sizeof(float)),
+                                sliced_v_,
                                 {m, n*3},
                                 {0, n*2},
                                 {m, n*3});
-      CHECK_EQ(xdnn_ret, false) << "slice error3!";
-      lite::Tensor broadcast_q;
-      broadcast_q.Resize({m, max_seq_len, n});
-      xdnn_ret = xdnn::broadcast<float>(ctx_, 
-                            sliced_q.data<float>(),
-                            broadcast_q.mutable_data<float>(TARGET(kXPU), broadcast_q.dims().production() * sizeof(float)),
-                            {m, 1, n},
-                            {m, step, n});
-      CHECK_EQ(xdnn_ret, false) << "broad ccast error.";
+      CHECK_EQ(xdnn_ret, false) << "slice value error!";
 
       if(step == 1) {
-        // XPU_CALL(xpu_memcpy(key_cache_,
-        //                   sliced_k.data<float>(),
-        //                  sliced_k.dims().production() * sizeof(float),
-        //                   XPU_DEVICE_TO_DEVICE));
-        xdnn_ret = xdnn::copy<float>(ctx_,
-                          sliced_k.data<float>(),
-                          key_cache_,
-                          sliced_k.dims().production());
-        // XPU_CALL(xpu_memcpy(value_cache_,
-        //                  sliced_v.data<float>(),
-        //                  sliced_v.dims().production() * sizeof(float),
-        //                  XPU_DEVICE_TO_DEVICE));
-        xdnn_ret = xdnn::copy<float>(ctx_,
-                          sliced_v.data<float>(),
-                          value_cache_,
-                          sliced_v.dims().production());
+        xdnn_ret = xdnn::copy<T>(ctx_,
+                          sliced_k_,
+                          key_cache,
+                          m*n);
+        xdnn_ret = xdnn::copy<T>(ctx_,
+                          sliced_v_,
+                          value_cache,
+                          m*n);
       } else {
-        lite::Tensor tmp_transpose_key_cache;
-        tmp_transpose_key_cache.Resize({step, m, n});
-        xdnn_ret = xdnn::transpose<float>(ctx_,
-                            key_cache_,
-                            tmp_transpose_key_cache.mutable_data<float>(TARGET(kXPU), tmp_transpose_key_cache.dims().production()*sizeof(float)),
+        // update K_cache
+        xdnn_ret = xdnn::transpose<T>(ctx_,
+                            key_cache,
+                            transpose_kv_buf_,
                             {m,step-1,n},
                             {1,0,2});
-        //XPU_CALL(xpu_memcpy(
-        //            tmp_transpose_key_cache.mutable_data<float>() + m*n*(step-1),
-        //            sliced_k.data<float>(),
-        //            sliced_k.dims().production() * sizeof(float),
-        //            XPU_DEVICE_TO_DEVICE));
-        xdnn_ret = xdnn::copy<float>(ctx_,
-                          sliced_k.data<float>(),
-                          tmp_transpose_key_cache.mutable_data<float>() + m*n*(step-1),
-                          sliced_k.dims().production());
-        xdnn_ret = xdnn::transpose<float>(ctx_,
-                            tmp_transpose_key_cache.data<float>(),
-                            key_cache_,
+        xdnn_ret = xdnn::copy<T>(ctx_,
+                          sliced_k_,
+                          transpose_kv_buf_ + m*n*(step-1),
+                          m*n);
+        xdnn_ret = xdnn::transpose<T>(ctx_,
+                            transpose_kv_buf_,
+                            key_cache,
                             {step,m,n},
                             {1,0,2});
-
-        lite::Tensor tmp_transpose_value_cache;
-        tmp_transpose_value_cache.Resize({step, m, n});
-        xdnn_ret = xdnn::transpose<float>(ctx_,
-                            value_cache_,
-                            tmp_transpose_value_cache.mutable_data<float>(TARGET(kXPU), tmp_transpose_value_cache.dims().production()*sizeof(float)),
+        // update V_cache
+        xdnn_ret = xdnn::transpose<T>(ctx_,
+                            value_cache,
+                            transpose_kv_buf_,
                             {m,step-1,n},
                             {1,0,2});
-        // XPU_CALL(xpu_memcpy(
-        //            tmp_transpose_value_cache.mutable_data<float>() + m*n*(step-1),
-        //            sliced_v.data<float>(),
-        //            sliced_v.dims().production() * sizeof(float),
-        //            XPU_DEVICE_TO_DEVICE));
-        xdnn_ret = xdnn::copy<float>(ctx_,
-                          sliced_v.data<float>(),
-                          tmp_transpose_value_cache.mutable_data<float>() + m*n*(step-1),
-                          sliced_v.dims().production());
-        xdnn_ret = xdnn::transpose<float>(ctx_,
-                            tmp_transpose_value_cache.data<float>(),
-                            value_cache_,
+        xdnn_ret = xdnn::copy<T>(ctx_,
+                          sliced_v_,
+                          transpose_kv_buf_ + m*n*(step-1),
+                          m*n);
+        xdnn_ret = xdnn::transpose<T>(ctx_,
+                            transpose_kv_buf_,
+                            value_cache,
                             {step,m,n},
                             {1,0,2});
       }
+      /*
+      if(step == 2) {
+        cout << "V_CACHE STEP = " << step << endl;
+        vector<float> tmp_v_cache_cpu(2 * m * n);
+        TargetWrapperXPU::MemcpySync(
+                        tmp_v_cache_cpu.data(),
+                        value_cache, 
+                        2*m*n*sizeof(float),
+                        IoDirection::DtoH);
+        for(int i=0; i<2*m*n; i++) {
+          cout << i << '\t' << tmp_v_cache_cpu[i] << endl;
+        }
+      }
+      */
 
-      lite::Tensor qk_tensor;
-      qk_tensor.Resize({m,head_num_, 1, step});
+      xdnn_ret = xdnn::broadcast<T>(ctx_, 
+                            sliced_q_,
+                            broadcast_q_,
+                            {m, 1, n},
+                            {m, step, n});
+      CHECK_EQ(xdnn_ret, 0) << "broad ccast error.";
 
       xdnn::QKVAttnParam qkv_attn_param(m, 
                                       step, 
@@ -589,23 +569,40 @@ public:
                                       0,
                                       false);
 
-
-      xdnn_ret = xdnn::qk_attention<float, float, float, int32_t>(
+      xdnn_ret = xdnn::constant<T>(ctx_,
+                                    self_mask_,
+                                    m * step,
+                                    static_cast<T>(0));
+              
+      xdnn_ret = xdnn::qk_attention<T, T, T, int32_t>(
           ctx_,
-          sliced_q.data<float>(),
-          key_cache_,
-          qk_tensor.mutable_data<float>(TARGET(kXPU), qk_tensor.dims().production() * sizeof(float)),
+          broadcast_q_,
+          key_cache,
+          qk_buffer_,
           nullptr,
           nullptr,
           nullptr,
           qkv_attn_param,
-          tmp_float_finish.data<float>());
-
-      xdnn_ret = xdnn::qk_v_attention<float, float, float, int32_t>(
+          self_mask_);
+      /*
+      if(step == 2 || step == 1) {
+        cout << "SELF_MASK STEP = " << step << endl;
+        vector<float> self_mask_cpu(m * step);
+        TargetWrapperXPU::MemcpySync(
+                        self_mask_cpu.data(),
+                        self_mask_, 
+                        m*step*sizeof(float),
+                        IoDirection::DtoH);
+        for(int i=0; i<m*step; i++) {
+          cout << i << '\t' << self_mask_cpu[i] << endl;
+        }
+      }
+      */
+      xdnn_ret = xdnn::qk_v_attention<T, T, T, int32_t>(
           ctx_,
-          qk_tensor.data<float>(),
-          value_cache_,
-          context_buf_, //qkv_tensor.mutable_data<float>(TARGET(kXPU), qkv_tensor.dims().production() * sizeof(float)),
+          qk_buffer_,
+          value_cache,
+          context_buf_,
           nullptr,
           nullptr,
           nullptr,
@@ -614,9 +611,10 @@ public:
       CHECK(false) << "NOT IMPLEMENTEDD.";
     }
 
-
-    if(step == 1 || step == 2) {
-      vector<float> tmp_v_cache(m*step*n);
+    /*
+    if(step == 2) {
+      // vector<float> tmp_v_cache(m*step*n);
+      vector<float> tmp_query(m*n);
       vector<float> tmp_context(m*n);
       TargetWrapperXPU::MemcpySync(
                         tmp_context.data(),
@@ -624,23 +622,19 @@ public:
                         m*n*sizeof(float), 
                         IoDirection::DtoH); 
       TargetWrapperXPU::MemcpySync(
-                        tmp_v_cache.data(),
-                        value_cache_, 
-                        m*n*step*sizeof(float), 
+                        tmp_query.data(),
+                        query_buf_, 
+                        m*n*sizeof(float), 
                         IoDirection::DtoH); 
-      cout << "V_CACHE STEP = " << step << endl;
-      for(int xx=0; xx<tmp_v_cache.size(); xx++) {
-        cout << xx << '\t' << tmp_v_cache[xx] << endl;
-      }
-      cout << "CONTEXT STEP = " << step << endl;
-      for(auto v:tmp_context) {
-        cout << v << '\t';
+      cout << "QUERY/CONTEXT STEP = " << step << endl;
+      for(int32_t xx=0; xx<tmp_context.size(); xx+=200) {
+        cout << xx << '\t' << tmp_query[xx] << '\t' << tmp_context[xx] << endl;
       }
       cout << endl;
-
     }
-
-    xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+    */
+    
+    xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
       ctx_, /* context */
       context_buf_,          /* x */
       param_->self_attention.attention_output_weight.kernel,
@@ -673,13 +667,10 @@ public:
                                   const int32_t max_seq_len,
                                   const int32_t step) {
     int32_t m = max_batch_size_;
-    int32_t n = t_parallel_param_.local_hidden_units_;
-    // int32_t k = hidden_units_;
-    // VLOG(2) << "max_seq_len is " << max_seq_len; // 39
-    // VLOG(2) << "step is " << step;
+    int32_t n = hidden_units_;
 
     int32_t xdnn_ret;
-    xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+    xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
       ctx_, /* context */
       from_tensor,          /* x */
       param_->cross_attention.query_weight.kernel,
@@ -702,7 +693,7 @@ public:
       CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
     
     if(step == 1) {
-      xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+      xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
         ctx_, /* context */
         memory_tensor,          /* x */
         param_->cross_attention.key_weight.kernel,
@@ -724,7 +715,7 @@ public:
         xdnn::Activation_t::LINEAR); /* act_type */
       CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
 
-      xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+      xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
         ctx_, /* context */
         memory_tensor,          /* x */
         param_->cross_attention.value_weight.kernel,
@@ -745,28 +736,27 @@ public:
         param_->cross_attention.value_weight.bias, /* bias */
         xdnn::Activation_t::LINEAR); /* act_type */
       CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
-    }
-
-    std::vector<int32_t> memory_sequence_length_cpu(m);
-    std::vector<float> tmp_float_finish_cpu(m * max_seq_len, -1e7);
-    TargetWrapperXPU::MemcpySync(
+    
+      std::vector<int32_t> memory_sequence_length_cpu(m);
+      std::vector<float> tmp_float_finish_cpu(m * max_seq_len, PLITE_FLT_MIN);
+      TargetWrapperXPU::MemcpySync(
                         memory_sequence_length_cpu.data(),
                         memory_sequence_length, 
                         m*sizeof(int32_t), 
                         IoDirection::DtoH); 
-    for(size_t i=0; i<m; i++) {
-      fill_n(tmp_float_finish_cpu.begin() + i*max_seq_len, 
-              memory_sequence_length_cpu[i], 
-              0.0f);
+      for(int32_t i=0; i<m; i++) {
+        std::fill_n(tmp_float_finish_cpu.begin() + i*max_seq_len, 
+                      memory_sequence_length_cpu[i], 
+                      0.0f);
+      }
+
+      TargetWrapperXPU::MemcpySync(
+                          cross_mask_, 
+                          tmp_float_finish_cpu.data(), 
+                          m * max_seq_len * sizeof(float), 
+                          IoDirection::HtoD);
     }
 
-    lite::Tensor tmp_float_finish; // TODO: 为了适应xdnn api的接口，keep_alive_beam_ 应该是float 类型，就避免了cast的步骤，这里先打个补丁绕过去
-    tmp_float_finish.Resize({m, max_seq_len});
-    TargetWrapperXPU::MemcpySync(
-            tmp_float_finish.mutable_data<float>(TARGET(kXPU), tmp_float_finish.dims().production()*sizeof(float)), 
-            tmp_float_finish_cpu.data(), 
-            tmp_float_finish_cpu.size()*sizeof(int32_t), 
-            IoDirection::HtoD);
     xdnn::QKVAttnParam qkv_attn_param(m, 
                                       max_seq_len, 
                                       head_num_,
@@ -776,43 +766,65 @@ public:
                                       0, // important!
                                       false);
     
-    lite::Tensor broadcast_q;
-    broadcast_q.Resize({m, max_seq_len, n});
-    xdnn_ret = xdnn::broadcast<float>(ctx_, 
+    xdnn_ret = xdnn::broadcast<T>(ctx_, 
                             query_buf_,
-                            broadcast_q.mutable_data<float>(TARGET(kXPU), broadcast_q.dims().production() * sizeof(float)),
+                            broadcast_q_,
                             {m, 1, n},
                             {m, max_seq_len, n});
     CHECK_EQ(xdnn_ret, 0) << "broadcast error!.";
-    
-    lite::Tensor qk_tensor;
-    qk_tensor.Resize({m, head_num_, 1, max_seq_len});
 
-    xdnn_ret = xdnn::qk_attention<float, float, float, int32_t>(
+    xdnn_ret = xdnn::qk_attention<T, T, T, int32_t>(
           ctx_,
-          broadcast_q.data<float>(),
+          broadcast_q_,
           key_mem_cache,
-          qk_tensor.mutable_data<float>(TARGET(kXPU), qk_tensor.dims().production() * sizeof(float)),
+          qk_buffer_,
           nullptr,
           nullptr,
           nullptr,
           qkv_attn_param,
-          tmp_float_finish.data<float>());
+          cross_mask_);
     CHECK_EQ(xdnn_ret, 0) << "cross attention qk_attention error.";
 
 
-    xdnn_ret = xdnn::qk_v_attention<float, float, float, int32_t>(
+    xdnn_ret = xdnn::qk_v_attention<T, T, T, int32_t>(
           ctx_,
-          qk_tensor.data<float>(),
+          qk_buffer_,
           value_mem_cache,
-          context_buf_, // tmp_qkv.mutable_data<float>(TARGET(kXPU), tmp_qkv.dims().production() * sizeof(float)),
+          context_buf_,
           nullptr,
           nullptr,
           nullptr,
           qkv_attn_param);
     CHECK_EQ(xdnn_ret, 0) << "cross attention qk_v_attention error.";
     
-    xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+    if(step == 2) {
+      /*
+      vector<float> tmp_v_out(m*n);
+      TargetWrapperXPU::MemcpySync(
+                        tmp_v_out.data(),
+                        query_buf_, 
+                        m*n*sizeof(float), 
+                        IoDirection::DtoH);
+      cout << "STEP QUERY = " << step << endl;
+      for(int i=0; i<m*n; i+=200) {
+        cout << i << '\t' << tmp_v_out[i] << endl;
+      }
+      */
+      /*
+      vector<float> tmp_v_out(m*n);
+      TargetWrapperXPU::MemcpySync(
+                        tmp_v_out.data(),
+                        context_buf_, 
+                        m*n*sizeof(float), 
+                        IoDirection::DtoH);
+      cout << "STEP CROSS = " << step << endl;
+      for(int i=0; i<m*n; i+=200) {
+        cout << i << '\t' << tmp_v_out[i] << endl;
+      }
+      */
+    }
+
+    xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
         ctx_, /* context */
         context_buf_,          /* x */
         param_->cross_attention.attention_output_weight.kernel,
@@ -845,10 +857,15 @@ private:
   bool keep_alive_beam_{};
 
   std::unique_ptr<OpenDecoder<T>> decoder_{};
-  T **K_cache_{};
-  T **V_cache_{};
-  T **K_mem_cache_{};
-  T **V_mem_cache_{};
+  //T **K_cache_{};
+  //T **V_cache_{};
+  array<T*, 2> K_cache_;
+  array<T*, 2> V_cache_;
+  //T **K_mem_cache_{};
+  //T **V_mem_cache_{};
+  vector<T*> K_mem_cache_;
+  vector<T*> V_mem_cache_;
+
   T *from_tensor_[2]{};
   T *decoder_buf_{};
 
@@ -857,37 +874,31 @@ private:
   /// T *lm_normed_result_buf_;
 
   T *decoder_normed_result_buf_{};
-  T *embedding_buf_{};
+  // T *embedding_buf_{};
   float *logits_buf_{};
   float *cum_log_buf_{};
-  int *word_ids_buf_{};
-  int *parent_ids_buf_{};
+  int32_t *word_ids_buf_{};
+  int32_t *parent_ids_buf_{};
   bool *finished_buf_{};
   bool *alive_finished_buf_{};
 
-  /// void *buf_{};
   lite::Tensor buf_tensor_;
   void *buf_{};
-  int *finished_count_buf_{};
+  int32_t *finished_count_buf_{};
   bool *h_finished_buf_{};
-  int *h_trg_length_{};
+  int32_t *h_trg_length_{};
   float *temp_storage_{};
-
 
   void *topK_kernel_workspace = nullptr;
   size_t topk_workspace_size_ = 0;
-  /// void *cublas_workspace_ = nullptr;
 
   T *padded_embedding_kernel{};
   T *padded_embedding_bias{};
   T *tmp_logits_buf_{};
 
-
 public:
   DecodingBeamsearch& operator=(const DecodingBeamsearch& ) = delete;
-
   DecodingBeamsearch& operator=(DecodingBeamsearch&& ) = delete;
-
   DecodingBeamsearch(baidu::xpu::api::Context *ctx,
                      const int32_t batch_size,
                      const int32_t beam_width,
@@ -927,25 +938,23 @@ public:
     args_.start_id_ = start_id;
     args_.end_id_ = end_id;
     args_.beam_search_diversity_rate_ = beam_search_diversity_rate;
-    VLOG(2) << "DECODINGBEAMSEARCH INFO: \n" 
-            << "batch_size\t" << batch_size << '\n'
-            << "beam_width\t" << beam_width << '\n'
-            << "seq_len\t" << seq_len << '\n'
-            << "head_num\t" << head_num << '\n'
-            << "size_per_head\t" << size_per_head << '\n'
-            << "vocab_size\t" << vocab_size << '\n'
-            << "decoder_layers\t" << decoder_layers << '\n'
-            << "memory_hidden_units\t" << memory_hidden_units << '\n'
-            << "momory_max_seq_len\t" << memory_max_seq_len << '\n'
-            << "STARTID:\t" << args_.start_id_ << '\n';
-    //if (args_.beam_width_ > 16 || args_.beam_width_ > MAX_K)
-    //  CHECK(false) << "Not Suported!";
+    
+    VLOG(2) << "DecodingBeamsearch INFO: \n" 
+            << "- batch_size\t" << batch_size << '\n'
+            << "- beam_width\t" << beam_width << '\n'
+            << "- seq_len\t" << seq_len << '\n'
+            << "- head_num\t" << head_num << '\n'
+            << "- size_per_head\t" << size_per_head << '\n'
+            << "- vocab_size\t" << vocab_size << '\n'
+            << "- decoder_layers\t" << decoder_layers << '\n'
+            << "- memory_hidden_units\t" << memory_hidden_units << '\n'
+            << "- momory_max_seq_len\t" << memory_max_seq_len << '\n'
+            << "- start_id:\t" << args_.start_id_ << '\n';
+
     if (std::is_same<T, float>::value)
       args_.vocab_size_padded_ = vocab_size;
     else 
       CHECK(false) << "half not supported now";
-    //if (std::is_same<T, half>::value)
-    //  args_.vocab_size_padded_ = (int)(ceil(vocab_size / 8.)) * 8;
 
     args_.alpha_ = alpha;
     args_.normalization_before_ = normalization_before;
@@ -961,11 +970,13 @@ public:
                                         : finished_candidate_num;
     args_.early_stopping_ = early_stopping;
 
-    K_cache_ = new T *[2];
-    V_cache_ = new T *[2];
+    //K_cache_ = new T *[2];
+    //V_cache_ = new T *[2];
 
-    K_mem_cache_ = new T *[args_.decoder_layers_];
-    V_mem_cache_ = new T *[args_.decoder_layers_];
+    //K_mem_cache_ = new T *[args_.decoder_layers_];
+    //V_mem_cache_ = new T *[args_.decoder_layers_];
+    K_mem_cache_.resize(args_.decoder_layers_);
+    V_mem_cache_.resize(args_.decoder_layers_);
 
     // TODO: OpenDecoder
     decoder_ = std::unique_ptr<OpenDecoder<T>>(new OpenDecoder<T>(ctx,
@@ -975,45 +986,34 @@ public:
                                                         is_fuse_qkv,
                                                         normalization_before));
     decoder_->set_max_batch_size(batch_size * beam_width);
+    decoder_->set_max_mem_length(memory_max_seq_len);
+    decoder_->set_max_seq_length(seq_len);
 
     size_t from_tensor_size =
-        args_.batch_size_ * args_.beam_width_ * args_.hidden_units_;  // type T 
-        // DEBUG: 8 * 4 * 1024 = 32768
+        args_.batch_size_ * args_.beam_width_ * args_.hidden_units_; 
     size_t decoder_workspace_size = decoder_->getWorkspaceSize();
     size_t decoder_normed_result_buffer_size =
-        args_.batch_size_ * args_.beam_width_ * args_.hidden_units_;  // type T
-        // DEBUG: 32768
+        args_.batch_size_ * args_.beam_width_ * args_.hidden_units_;
     size_t cache_size = (prefix_lm)
-                            ? (args_.batch_size_ * args_.beam_width_ *
-                               (args_.seq_len_ + args_.memory_max_seq_len_) *
-                               args_.hidden_units_)
-                            : (args_.batch_size_ * args_.beam_width_ *
-                               args_.seq_len_ * args_.hidden_units_);  // type T
-        // 8 * 4 * 1024 * 39 = 1277952
+          ? (args_.batch_size_ * args_.beam_width_ 
+            * (args_.seq_len_ + args_.memory_max_seq_len_) 
+            * args_.hidden_units_)
+          : (args_.batch_size_ * args_.beam_width_ 
+            * args_.seq_len_ * args_.hidden_units_);
+
     size_t mem_cache_size =
         (prefix_lm) ? 0 : (args_.batch_size_ * args_.beam_width_ *
                            memory_max_seq_len * args_.hidden_units_);  // type T
         // 8 * 4 * 256 * 1024 = 8388608
-    size_t logits_buf_size = args_.batch_size_ * args_.beam_width_ *
-                             args_.vocab_size_padded_;  // type float
-        // 8 * 4 * 38512 = 1232384
-    size_t cum_log_buf_size =
-        args_.batch_size_ * args_.beam_width_;  // type float
-        // 32
-    size_t word_ids_buf_size =
-        args_.batch_size_ * args_.beam_width_;  // type int
-        // 32
-    size_t parent_ids_buf_size =
-        keep_alive_beam_ ? word_ids_buf_size : 0;  // type int
-        // 32
-    size_t finished_buf_size =
-        args_.batch_size_ * args_.beam_width_;  // type bool
-        // 32
+    size_t logits_buf_size      = args_.batch_size_ * args_.beam_width_ *
+                                  args_.vocab_size_padded_;
+    size_t cum_log_buf_size     = args_.batch_size_ * args_.beam_width_;
+    size_t word_ids_buf_size    = args_.batch_size_ * args_.beam_width_;
+    size_t parent_ids_buf_size  = keep_alive_beam_ ? word_ids_buf_size : 0;
+    size_t finished_buf_size    = args_.batch_size_ * args_.beam_width_;  // type bool
+
     size_t alive_finished_buf_size = keep_alive_beam_ ? finished_buf_size : 0;
-        // 32
     size_t finished_count_size = (size_t)(ceil(1 / 32.)) * 32;  // type int
-        // 32
-    /// VLOG(2) << "DDDEBUG " << from_tensor_size << '\t' << decoder_normed_result_buffer_size << '\t' << cache_size << '\t' << mem_cache_size << '\t' << finished_count_size;
     
     size_t storage_size_per_beam = 2 * args_.beam_width_ + SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS * (2 * MAX_K + 2);
     args_.temp_storage_size_ = args_.batch_size_ * args_.beam_width_ * storage_size_per_beam;  // type float
@@ -1031,7 +1031,6 @@ public:
       padded_embedding_kernel_size = 0;
       padded_embedding_bias_size = 0;
     }
-
 
     // When using separated alive and finish beam queues, some buffers size need
     // to be doubled to restore beam search intermedia results of both alive and
@@ -1061,11 +1060,11 @@ public:
     // TODO: omit topK_kernel_laucher
     { 
       // implement topK_update_kernelLauncher()
-      const int max_block_per_beam = 8;
-      int temp_log_probs_buf_size = batch_size * beam_width * vocab_size;  // type float
+      const int32_t max_block_per_beam = 8;
+      int32_t temp_log_probs_buf_size = batch_size * beam_width * vocab_size;  // type float
       // select top beam_width*2 for topk_tmp_id_buf and topk_tmp_val_buf
-      int topk_tmp_ids_buf_size = batch_size * beam_width * beam_width * 2 * max_block_per_beam;  // type int
-      int topk_tmp_val_buf_size = batch_size * beam_width * beam_width * 2 * max_block_per_beam;  // type float
+      int32_t topk_tmp_ids_buf_size = batch_size * beam_width * beam_width * 2 * max_block_per_beam;  // type int
+      int32_t topk_tmp_val_buf_size = batch_size * beam_width * beam_width * 2 * max_block_per_beam;  // type float
       // // to save tmp output_cum_log_probs results of the alive beams
       // topk_tmp_val_buf_size += batch_size * beam_width;
 
@@ -1085,12 +1084,14 @@ public:
 
 
     size_t datatype_buf_size =
-        from_tensor_size * 2 + decoder_workspace_size +
+        from_tensor_size * 2 + 
         (cache_size * 4 + mem_cache_size * 2) * args_.decoder_layers_ +
+        decoder_workspace_size + 
         lm_head_buffer_size;
 
+    // 为了兼容qk_attention只能接受float类型的mask，所以datatype_buf_size分配sizeof(float)而不是size(T)
     buf_ = buf_tensor_.mutable_data(TARGET(kXPU), 
-                sizeof(T) * datatype_buf_size + 
+                sizeof(float) * datatype_buf_size + 
                 sizeof(float) * (logits_buf_size + cum_log_buf_size) + 
                 sizeof(T) * tmp_logits_buf_size + 
                 sizeof(T) * padded_embedding_kernel_size + 
@@ -1100,11 +1101,12 @@ public:
                 topk_workspace_size_ + 
                 sizeof(float) * args_.temp_storage_size_ + 
                 sizeof(int32_t) * finished_count_size); // TODO: not accurate!
-      
+
+
     from_tensor_[0] = (T*)(buf_);
     from_tensor_[1] = (T*)(from_tensor_[0] + from_tensor_size);
 
-    for (int i = 0; i < args_.decoder_layers_; ++i) {
+    for (int32_t i = 0; i < args_.decoder_layers_; ++i) {
       K_mem_cache_[i] = from_tensor_[1] + from_tensor_size + i * mem_cache_size * 2;
       V_mem_cache_[i] = from_tensor_[1] + from_tensor_size + i * mem_cache_size * 2 + mem_cache_size;
     }
@@ -1131,18 +1133,18 @@ public:
     } else {
       decoder_normed_result_buf_ = (decoder_buf_ + decoder_workspace_size);
       // Used for post-norm.
-      embedding_buf_ = (decoder_buf_ + decoder_workspace_size);
+      // embedding_buf_ = (decoder_buf_ + decoder_workspace_size);
     }
 
     logits_buf_ = (float *)(decoder_normed_result_buf_ +
                             decoder_normed_result_buffer_size);
     cum_log_buf_ = (float *)(logits_buf_ + logits_buf_size);
-    word_ids_buf_ = (int *)(cum_log_buf_ + cum_log_buf_size);
-    parent_ids_buf_ = (int *)(word_ids_buf_ + word_ids_buf_size);
+    word_ids_buf_ = (int32_t *)(cum_log_buf_ + cum_log_buf_size);
+    parent_ids_buf_ = (int32_t *)(word_ids_buf_ + word_ids_buf_size);
     finished_buf_ = (bool *)(parent_ids_buf_ + parent_ids_buf_size);
     alive_finished_buf_ = (bool *)(finished_buf_ + finished_buf_size);
     temp_storage_ = (float *)(alive_finished_buf_ + alive_finished_buf_size);
-    finished_count_buf_ = (int *)(temp_storage_ + args_.temp_storage_size_);
+    finished_count_buf_ = (int32_t *)(temp_storage_ + args_.temp_storage_size_);
     topK_kernel_workspace = (void *)(finished_count_buf_ + finished_count_size);
     padded_embedding_kernel =
         (T *)((char *)topK_kernel_workspace + topk_workspace_size_);
@@ -1151,14 +1153,14 @@ public:
     tmp_logits_buf_ =
         (T *)(padded_embedding_bias + padded_embedding_bias_size);
 
-    h_finished_buf_ = new bool[finished_buf_size];
-    h_trg_length_ = new int[args_.batch_size_];
+    // h_finished_buf_ = new bool[finished_buf_size]; // TODO
+    // h_trg_length_ = new int[args_.batch_size_]; // TODO
   }
   
   void forward(const vector<DecoderInitParam<T>>& param, DecodingInitParam<T>& decoding_params) {
-    const int m = args_.batch_size_ * args_.beam_width_;
-    const int k = args_.hidden_units_;
-    const int n = args_.vocab_size_padded_;
+    const int32_t m = args_.batch_size_ * args_.beam_width_;
+    const int32_t k = args_.hidden_units_;
+    const int32_t n = args_.vocab_size_padded_;
     const T *embedding_kernel_ptr = nullptr;
     const T *embedding_bias_ptr = nullptr;
     embedding_kernel_ptr = (const T*)decoding_params.embedding_kernel;
@@ -1167,7 +1169,7 @@ public:
     // int32_t max_trg_len = 0;
 
     // call init_kernelLauncher_v2()
-    int xdnn_ret;
+    int32_t xdnn_ret;
     xdnn_ret = xdnn::constant<bool>(ctx_, 
                             finished_buf_, 
                             args_.batch_size_ * args_.beam_width_ * 2, 
@@ -1178,52 +1180,31 @@ public:
                             args_.batch_size_ * args_.beam_width_, 
                             false);
     CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 2!.";
-    /*
-    xdnn_ret = xdnn::constant<int32_t>(ctx_, 
-                            decoding_params.sequence_length, 
-                            args_.batch_size_ * args_.beam_width_ * 2, 
-                            0);
-    CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 3!.";
-    */
+
     xdnn_ret = xdnn::constant<int32_t>(ctx_, 
                             word_ids_buf_, 
                             args_.batch_size_ * args_.beam_width_, 
                             args_.start_id_);
     CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 3!.";
     
-    /*
-    xdnn_ret = xdnn::constant<float>(ctx_, 
-                            cum_log_buf_, 
-                            args_.batch_size_ * args_.beam_width_ * 2, 
-                            -1e20f); // TODO
-    CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 4!.";
-    */
     vector<float> h_cum_log_buf_0(args_.batch_size_ * args_.beam_width_, -1e20f);
     vector<float> h_cum_log_buf_1(args_.batch_size_ * args_.beam_width_, -1e20f);
-    for(size_t tmp_i=0; tmp_i<args_.batch_size_; tmp_i++) {
+    for(int32_t tmp_i=0; tmp_i<args_.batch_size_; tmp_i++) {
       h_cum_log_buf_1.at(tmp_i * args_.beam_width_) = 0.0f;
     }
 
-    /*
-    TargetWrapperXPU::MemcpySync(
-            cum_log_buf_, 
-            h_tmp_cum_log_buf.data(), 
-            args_.batch_size_ * args_.beam_width_ * 2 * sizeof(float), 
-            IoDirection::HtoD);
-    */
     // end init_kernelLauncher_v2()
     
-    int cache_size =
-        (args_.prefix_lm_) ? 
+    int32_t cache_size = (args_.prefix_lm_) ? 
             (m * (args_.seq_len_ + args_.memory_max_seq_len_) * args_.hidden_units_)
             : (m * args_.seq_len_ * args_.hidden_units_);  // type T
             // 4 * 8 * 256 * 1024 = 8388608
 
 
-    for (uint step = 1; step <= args_.seq_len_; ++step) {
-      // VLOG(2) << "SSSTEP " << step;
+    for (uint32_t step = 1; step <= args_.seq_len_; ++step) {
       // we use two-way buffer
-      int kv_cache_id = step & 0x1;
+      int32_t kv_cache_id = step & 0x1;
+      /*
       if(step == 2) {
         vector<int32_t> h_word_buf(args_.batch_size_ * args_.beam_width_);
         TargetWrapperXPU::MemcpySync(
@@ -1233,12 +1214,13 @@ public:
             IoDirection::DtoH); 
         cout << "STEP2 WORD IND " << endl;
         for(auto w: h_word_buf) {
-          cout << w << endl;
+          cout << w << '\t';
         }
+        cout << endl;
       }
-      // for debugging
+      */
       // call embedding_lookup_sine_position_encoding_kernel_launcher()
-      xdnn_ret = xdnn::embedding<float, int32_t>(
+      xdnn_ret = xdnn::embedding<T, int32_t>(
                                 ctx_, /* context */
                                 decoding_params.embedding_table,
                                 word_ids_buf_,
@@ -1249,7 +1231,7 @@ public:
                                 0);
       CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 5!.";                            
       const float scale = std::sqrt(args_.hidden_units_);
-      xdnn_ret = xdnn::scale<float>(
+      xdnn_ret = xdnn::scale<T>(
                         ctx_,
                         from_tensor_[0],
                         from_tensor_[0],
@@ -1258,7 +1240,7 @@ public:
                         scale,            /* alpha */
                         0.0f);            /* beta */
       CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 6!.";
-      xdnn_ret = xdnn::broadcast_add<float>(ctx_,
+      xdnn_ret = xdnn::broadcast_add<T>(ctx_,
                     from_tensor_[0],
                     decoding_params.position_encoding_table 
                     + (step - 1 + args_.pos_offset_) * args_.hidden_units_,
@@ -1268,8 +1250,8 @@ public:
       CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 7!.";
       // end embedding_lookup_sine_position_encoding_kernel_launcher()
 
-      int from_id, out_id;
-      for (int layer = 0; layer < args_.decoder_layers_; ++layer) {
+      int32_t from_id, out_id;
+      for (int32_t layer = 0; layer < args_.decoder_layers_; ++layer) {
         /*
          * For the first layer (layer-0), from_id  is 0. We also stored the embedding lookup
          * result in from_tensor_[0]
@@ -1304,7 +1286,20 @@ public:
               keep_alive_beam_ ? alive_finished_buf_ : finished_buf_);
         }
       } // end layer loop
-
+      
+      if(step == 2) {
+          vector<float> attention_out(args_.batch_size_ * args_.beam_width_ * args_.hidden_units_);
+          TargetWrapperXPU::MemcpySync(
+              attention_out.data(), 
+              from_tensor_[0], 
+              args_.batch_size_ * args_.beam_width_ * args_.hidden_units_ * sizeof(float), 
+              IoDirection::DtoH); 
+          cout << "STEP = " << step << endl;
+          for(size_t i=0; i<attention_out.size(); i+=200) {
+            cout << i << '\t' << attention_out[i] << endl;
+          }
+      }
+      
       if(step > min_trg_len) {
         xdnn_ret = xdnn::layer_norm<float>(ctx_,    
                            from_tensor_[out_id], 
@@ -1364,12 +1359,11 @@ public:
         }
       }
 
-      // std::this_thread::sleep_for(std::chrono::milliseconds(100));
       if(args_.beam_width_ > 1) {
-        int decoder_max_seq_len = args_.seq_len_;
+        int32_t decoder_max_seq_len = args_.seq_len_;
         update_KV_cache_kernelLauncher_v2(
-            K_cache_,
-            V_cache_,
+            &K_cache_[0],
+            &V_cache_[0],
             keep_alive_beam_ ? parent_ids_buf_ : decoding_params.parent_ids + (step - 1) * m,
             keep_alive_beam_ ? alive_finished_buf_ : finished_buf_,
             args_.batch_size_,
@@ -1516,7 +1510,7 @@ public:
     float length_penalty = std::pow((5. + step + 1) / 6., alpha);
     float max_length_penalty = std::pow((5. + max_out_len + 1) / 6., alpha);
 
-    for(size_t bs=0; bs<batch_size; bs++) {
+    for(int32_t bs=0; bs<batch_size; bs++) {
       T* output_cum_log_probs_ptr0 = h_output_cum_log_probs_ptr0->data() + bs * beam_width;
       T* output_cum_log_probs_ptr1 = h_output_cum_log_probs_ptr1->data() + bs * beam_width;
       int32_t* output_word_ids_ptr = h_output_word_ids + bs * (beam_width * 2);
@@ -1535,13 +1529,13 @@ public:
       finish_candidate.reserve(beam_width * 2);
 
       if(step == 1) {
-        for(size_t i=0; i<beam_width; i++) {
-          finish_candidate[i].u = PL_FLT_MIN;
+        for(int32_t i=0; i<beam_width; i++) {
+          finish_candidate[i].u = PLITE_FLT_MIN;
           finish_candidate[i].idx = -1;
           finish_candidate[i].len = 0;
         }
       } else {
-        for(size_t i=0; i<beam_width; i++) {
+        for(int32_t i=0; i<beam_width; i++) {
           finish_candidate[i].u = output_cum_log_probs_ptr0[i];
           finish_candidate[i].idx = i;
           finish_candidate[i].len = output_parent_ids_ptr[i];
@@ -1550,7 +1544,7 @@ public:
       }
 
       int32_t alive_num = 0;
-      for(size_t i=0; i<beam_width*2; i++) {
+      for(int32_t i=0; i<beam_width*2; i++) {
         int32_t word_id = h_sorted_ind_beam_topk_ptr[h_sorted_ind_total_topk_ptr[i]];
         float cum_log_prob = h_sorted_value_total_topk_ptr[i];
         int32_t beam_id = h_sorted_ind_total_topk_ptr[i] / (beam_width * 2) + bs * beam_width;
@@ -1577,22 +1571,22 @@ public:
       std::sort(finish_candidate.begin(), finish_candidate.end(), 
                 [](TopKFinish<T> &a, TopKFinish<T>& b) {return a.u > b.u;});
       
-      for(size_t i=0; i<beam_width; i++) {
+      for(int32_t i=0; i<beam_width; i++) {
         output_word_ids_ptr[i] = end_id;
         output_cum_log_probs_ptr0[i] = finish_candidate[i].u;
         output_parent_ids_ptr[i] = finish_candidate[i].idx;
         sequence_length_ptr[i] = finish_candidate[i].len;
-        finished_ptr[i] = finish_candidate[i].u > (PL_FLT_MIN + static_cast<T>(10.0f)) ? 1 : 0;
+        finished_ptr[i] = finish_candidate[i].u > (PLITE_FLT_MIN + static_cast<T>(10.0f)) ? 1 : 0;
       }
 
       // early finish
-      float lowest_finish = finish_num == 0 ? PL_FLT_MIN : output_cum_log_probs_ptr0[finish_num - 1];
+      float lowest_finish = finish_num == 0 ? PLITE_FLT_MIN : output_cum_log_probs_ptr0[finish_num - 1];
       // The best possible score of the most likely alive sequence
       
       float lower_bound = (float)output_cum_log_probs_ptr1[0] / max_length_penalty;
 
       if (step == max_out_len || lowest_finish > lower_bound) {  // when finishing
-        for (int i = 0; finish_num < beam_width; ++finish_num, ++i) {
+        for (int32_t i = 0; finish_num < beam_width; ++finish_num, ++i) {
           output_word_ids_ptr[finish_num] = h_tmp_word_ids_buf_ptr[i];
           output_cum_log_probs_ptr0[finish_num] = output_cum_log_probs_ptr1[i] / length_penalty;
           output_parent_ids_ptr[finish_num] = output_parent_ids_ptr[i + beam_width];
@@ -1600,7 +1594,7 @@ public:
           finished_ptr[finish_num] = 1;
         }
         // If early stop, also mark the alive beams finished.
-        for (int i = beam_width; i < beam_width*2; ++i) {
+        for (int32_t i = beam_width; i < beam_width*2; ++i) {
           finished_ptr[i] = 1;
           alive_finished_ptr[i - beam_width] = 1;
         }
@@ -1643,15 +1637,15 @@ public:
                                        T** value_cache,
                                        const int* beam_ids,
                                        const bool* finished,
-                                       const int batch_size,
-                                       const int beam_width,
-                                       const int head_num,
-                                       const int size_per_head,
-                                       const int step,
-                                       const int decoder_max_seq_len,
-                                       const int cache_size,
-                                       const int decoder_layers,
-                                       const int memory_max_seq_len = -1) {
+                                       const int32_t batch_size,
+                                       const int32_t beam_width,
+                                       const int32_t head_num,
+                                       const int32_t size_per_head,
+                                       const int32_t step,
+                                       const int32_t decoder_max_seq_len,
+                                       const int32_t cache_size,
+                                       const int32_t decoder_layers,
+                                       const int32_t memory_max_seq_len = -1) {
     if(memory_max_seq_len != -1) {
       CHECK(false) << "memory_max_seq_len = -1 not implemented.";
     }
@@ -1663,10 +1657,10 @@ public:
             batch_size * beam_width * sizeof(int32_t), 
             IoDirection::DtoH); 
     */
-    int src_id = step & 0x1;
-    int tgt_id = 1 - src_id;
+    int32_t src_id = step & 0x1;
+    int32_t tgt_id = 1 - src_id;
     int32_t xdnn_ret;
-    for(size_t layer=0; layer<decoder_layers; layer++) {
+    for(int32_t layer=0; layer<decoder_layers; layer++) {
       xdnn_ret = xdnn::gather<float, int32_t>(ctx_,
               key_cache[src_id] + layer * cache_size,
               beam_ids,
@@ -1687,16 +1681,12 @@ public:
   } // end update_KV_cache_kernelLauncher_v2
 
   virtual ~DecodingBeamsearch() {
-    delete[] K_cache_;
-    delete[] V_cache_;
-    delete[] K_mem_cache_;
-    delete[] V_mem_cache_;
-    delete[] h_finished_buf_;
-    delete[] h_trg_length_;
-    /*
-    delete decoder_;
-    allocator_.free(buf_);
-    */
+    // delete[] K_cache_;
+    // delete[] V_cache_;
+    // delete[] K_mem_cache_;
+    // delete[] V_mem_cache_;
+    // delete[] h_finished_buf_;
+    // delete[] h_trg_length_;
   }
 };
 
@@ -1752,6 +1742,7 @@ static void DecodingKernel(
     const int64_t max_len,
     const float beam_search_diversity_rate,
     const float alpha) {
+  // TODO: this is for debugging, remove in the formal release
   CHECK_EQ(input->numel(), 32*39*1024) << "input dimmension mismatch!";
   vector<float> cpu_input(32*39*1024);
   vector<int32_t> cpu_mem_seq_len(32);
@@ -1777,14 +1768,6 @@ static void DecodingKernel(
   const int32_t beam_width = (decoding_strategy == "beam_search" ||
                     decoding_strategy == "beam_search_v2") ? 
                     beam_size : 1;
-  /*
-  const int32_t candidate_num = (decoding_strategy == "topk_sampling" ||
-                    decoding_strategy == "topp_sampling") ? 
-                    topk : 1;
-  const float probability_threshold = (decoding_strategy == "topk_sampling" ||
-                    decoding_strategy == "topp_sampling") ? 
-                    topp : 0.0;
-  */
   auto input_dims = input->dims();
   const int32_t batch_size = (decoding_strategy == "beam_search" ||
                      decoding_strategy == "beam_search_v2")
@@ -1792,10 +1775,10 @@ static void DecodingKernel(
                         : input_dims[0];
   const int32_t memory_max_seq_len = input_dims[1];
   const int32_t memory_hidden_dim = input_dims[2];
-  const int vocab_size = word_embedding->dims()[0];
-  VLOG(2) << "VOCAB SIZE IS " << vocab_size;
-  VLOG(2) << "SEQUENCE LEN IS " << sequence_length->dims();
-  VLOG(2) << "EMBEDDING DIM " << word_embedding->dims();
+  const int32_t vocab_size = word_embedding->dims()[0];
+  // VLOG(2) << "VOCAB SIZE IS " << vocab_size;
+  // VLOG(2) << "SEQUENCE LEN IS " << sequence_length->dims();
+  // VLOG(2) << "EMBEDDING DIM " << word_embedding->dims();
   DecodingInitParam<float> decoding_params;
   decoding_params.output_ids = output_ids->mutable_data<int32_t>(
                                   TARGET(kHost), output_ids->memory_size());
@@ -1828,9 +1811,7 @@ static void DecodingKernel(
     params[i].self_layernorm.beta = self_ln_bias[i]->data<float>();
     // query
     params[i].self_attention.query_weight.kernel = self_q_weight[i]->data<float>();
-    // VLOG(2) << "CNT i: " << i << " dim: " <<  self_q_weight[i]->dims();
     params[i].self_attention.query_weight.bias = self_q_bias[i]->data<float>();
-    // VLOG(2) << "CNT bias i: " << i << " dim: " <<  self_q_bias[i]->dims();
     // key
     params[i].self_attention.key_weight.kernel = self_k_weight[i]->data<float>();
     params[i].self_attention.key_weight.bias = self_k_bias[i]->data<float>();
@@ -1865,18 +1846,14 @@ static void DecodingKernel(
     params[i].ffn.output_weight.kernel = ffn_out_weight[i]->data<float>(); // [4096, 1024]
     params[i].ffn.output_weight.bias = ffn_out_bias[i]->data<float>();
   }
-
   decoding_params.layernorm.gamma = decoder_ln_weight->data<float>();
   decoding_params.layernorm.beta = decoder_ln_bias->data<float>();
   // for embedding
   decoding_params.embedding_table = word_embedding->data<float>();
-
   // for weight sharing matmul
   decoding_params.embedding_kernel = embedding_weight->data<float>();
-  // VLOG(2) << "embedding_kernel: " <<  embedding_weight->dims();
   // for matmul bias
   decoding_params.embedding_bias = embedding_bias->data<float>();
-
   decoding_params.position_encoding_table = positional_embedding_weight->data<float>();
 
   std::unique_ptr<DecodingBeamsearch<float>> decoding_beam_search;
@@ -1913,43 +1890,13 @@ static void DecodingKernel(
 
 void FusionDecodingCompute::PrepareForRun() {
   auto& ctx = this->ctx_->As<XPUContext>();
-  int maxptr_size = xdnn::get_max_ptr_size(ctx.GetRawContext());
+  int32_t maxptr_size = xdnn::get_max_ptr_size(ctx.GetRawContext());
   input_max_xpu_guard_ =
       TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
   weight_max_xpu_guard_ =
       TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
   output_max_xpu_guard_ =
       TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
-  /*
-  auto& param = this->Param<param_t>();
-  arg_cross_key_bias_ = prepare_weight<float>(param.cross_key_bias_);
-  arg_cross_key_weight_ = prepare_weight<float>(param.cross_key_weight_); 
-  arg_cross_layernorm_bias_ = prepare_weight<float>(param.cross_layernorm_bias_);
-  arg_cross_layernorm_weight_ = prepare_weight<float>(param.cross_layernorm_weight_);
-  arg_cross_out_bias_ = prepare_weight<float>(param.cross_out_bias_);
-  arg_cross_out_weight_ = prepare_weight<float>(param.cross_out_weight_);
-  arg_cross_query_bias_ = prepare_weight<float>(param.cross_query_bias_);
-  arg_cross_query_weight_ = prepare_weight<float>(param.cross_query_weight_);
-  arg_cross_value_bias_ = prepare_weight<float>(param.cross_value_bias_);
-  arg_cross_value_weight_ = prepare_weight<float>(param.cross_value_weight_);
-  arg_ffn_inter_bias_ = prepare_weight<float>(param.ffn_inter_bias_);
-  arg_ffn_inter_weight_ = prepare_weight<float>(param.ffn_inter_weight_);
-  arg_ffn_layernorm_bias_ = prepare_weight<float>(param.ffn_layernorm_bias_);
-  arg_ffn_layernorm_weight_ = prepare_weight<float>(param.ffn_layernorm_weight_);
-  arg_ffn_out_bias_ = prepare_weight<float>(param.ffn_out_bias_);
-  arg_ffn_out_weight_ = prepare_weight<float>(param.ffn_out_weight_);
-  arg_self_key_bias_ = prepare_weight<float>(param.self_key_bias_);
-  arg_self_key_weight_ = prepare_weight<float>(param.self_key_weight_);
-  arg_self_layernorm_bias_ = prepare_weight<float>(param.self_layernorm_bias_);
-  arg_self_layernorm_weight_ = prepare_weight<float>(param.self_layernorm_weight_);
-  arg_self_out_bias_ = prepare_weight<float>(param.self_out_bias_);
-  arg_self_out_weight_ = prepare_weight<float>(param.self_out_weight_);
-  arg_self_query_bias_ = prepare_weight<float>(param.self_query_bias_);
-  arg_self_query_weight_ = prepare_weight<float>(param.self_query_weight_);
-  arg_self_value_bias_ = prepare_weight<float>(param.self_value_bias_);
-  arg_self_value_weight_ = prepare_weight<float>(param.self_value_weight_);
-  */
-
   return;
 }
 
@@ -1960,7 +1907,7 @@ void FusionDecodingCompute::RunDecodingForward() {
 
   int32_t batch_size = param.input_->dims()[0];
   int32_t max_out_len = param.rel_len_ ?  param.max_len_ + param.input_->dims()[1] : param.max_len_;
-  // VLOG(2) << "PARAM MAX_LEN " << param.max_len_;
+  
   std::vector<int64_t> output_dims;
   std::vector<int64_t> parent_ids_dims;
   std::vector<int64_t> sequence_length_dims({batch_size});
@@ -1986,11 +1933,14 @@ void FusionDecodingCompute::RunDecodingForward() {
   }
 
   param.output_ids_->Resize(output_dims);
-  param.output_ids_->mutable_data(TARGET(kHost), param.output_ids_->dims().production()*sizeof(int32_t));
+  param.output_ids_->mutable_data(TARGET(kHost), 
+                      param.output_ids_->dims().production()*sizeof(int32_t));
   param.parent_ids_->Resize(parent_ids_dims);
-  param.parent_ids_->mutable_data(TARGET(kHost), param.parent_ids_->dims().production()*sizeof(int32_t));
+  param.parent_ids_->mutable_data(TARGET(kHost), 
+                      param.parent_ids_->dims().production()*sizeof(int32_t));
   param.sequence_length_->Resize(sequence_length_dims);
-  param.sequence_length_->mutable_data(TARGET(kHost), param.sequence_length_->dims().production()*sizeof(int32_t));
+  param.sequence_length_->mutable_data(TARGET(kHost), 
+                      param.sequence_length_->dims().production()*sizeof(int32_t));
 
   DecodingKernel<float>(
     xpu_ctx,
@@ -2042,8 +1992,7 @@ void FusionDecodingCompute::RunDecodingForward() {
     param.eos_id_,
     max_out_len,
     param.beam_search_diversity_rate_,
-    param.alpha_
-  );
+    param.alpha_);
 
   return;
 }
