@@ -1187,8 +1187,8 @@ public:
                             args_.start_id_);
     CHECK_EQ(xdnn_ret, 0) << "calling xdnn::constant error 3!.";
     
-    vector<float> h_cum_log_buf_0(args_.batch_size_ * args_.beam_width_, -1e20f);
-    vector<float> h_cum_log_buf_1(args_.batch_size_ * args_.beam_width_, -1e20f);
+    vector<float> h_cum_log_buf_0(args_.batch_size_ * args_.beam_width_, PLITE_FLT_MIN);
+    vector<float> h_cum_log_buf_1(args_.batch_size_ * args_.beam_width_, PLITE_FLT_MIN);
     for(int32_t tmp_i=0; tmp_i<args_.batch_size_; tmp_i++) {
       h_cum_log_buf_1.at(tmp_i * args_.beam_width_) = 0.0f;
     }
@@ -1287,6 +1287,7 @@ public:
         }
       } // end layer loop
       
+      /*
       if(step == 2) {
           vector<float> attention_out(args_.batch_size_ * args_.beam_width_ * args_.hidden_units_);
           TargetWrapperXPU::MemcpySync(
@@ -1299,6 +1300,7 @@ public:
             cout << i << '\t' << attention_out[i] << endl;
           }
       }
+      */
       
       if(step > min_trg_len) {
         xdnn_ret = xdnn::layer_norm<float>(ctx_,    
@@ -1333,12 +1335,13 @@ public:
             embedding_bias_ptr, /* bias */
             xdnn::Activation_t::LINEAR); /* act_type */
         CHECK_EQ(xdnn_ret, 0) << "calling embedding_kernel fc_fusion error!.";  
-      
+
+        int32_t finished_cnt = 0;
         if(is_fuse_topk_softMax_ == true) {
           if(keep_alive_beam_ == true) {
             // Use separated alive and finish beam queues to avoid the decrease
             // of alive beams.
-            topK_softMax_update(tmp_logits_buf_,
+            finished_cnt = topK_softMax_update(tmp_logits_buf_,
                                 finished_buf_,
                                 alive_finished_buf_,
                                 decoding_params.sequence_length,
@@ -1351,6 +1354,8 @@ public:
                                 reinterpret_cast<void *>(temp_storage_),
                                 step,
                                 args_);
+            if(finished_cnt == args_.batch_size_ * args_.beam_width_ * 2)
+              break; // step loop end here.
           } else {
             CHECK(false) << "keep_alive_beam == false not implemented.";
           }
@@ -1379,7 +1384,8 @@ public:
     } // end step loop
   }
 
-  void topK_softMax_update(
+  // TODO：返回int32_t算一个补丁操作，后面要改正过来。
+  int32_t topK_softMax_update(
             const T* log_probs,
             bool* finished,
             bool* alive_finished,
@@ -1425,18 +1431,23 @@ public:
     xdnn_ret = xdnn::sorted_softmax_topk<float, int32_t>(
                                         ctx_,
                                         log_probs,
-                                        sorted_beam_value.mutable_data<float>(TARGET(kXPU), sorted_beam_value.dims().production()*sizeof(float)),
-                                        sorted_ind_beam_topk.mutable_data<int32_t>(TARGET(kXPU), sorted_ind_beam_topk.dims().production()*sizeof(int32_t)),
+                                        sorted_beam_value.mutable_data<float>(TARGET(kXPU)),
+                                        sorted_ind_beam_topk.mutable_data<int32_t>(TARGET(kXPU)),
                                         {batch_size*beam_width, vocab_size},
                                         1,
                                         beam_width*2);
     CHECK_EQ(xdnn_ret, 0) << "calling sorted_softmax_topk error.";
 
+    xdnn_ret = xdnn::log<float>(ctx_,
+                                sorted_beam_value.data<float>(),
+                                sorted_beam_value.mutable_data<float>(),
+                                batch_size * beam_width * beam_width * 2);
+    CHECK_EQ(xdnn_ret, 0) << "calling log error.";
+
     lite::Tensor sub_cum_log_buf_1; // TODO: remove in the future
     sub_cum_log_buf_1.Resize({batch_size, beam_width});
-    sub_cum_log_buf_1.mutable_data<float>(TARGET(kXPU), sub_cum_log_buf_1.dims().production() * sizeof(float));
     TargetWrapperXPU::MemcpySync(
-            sub_cum_log_buf_1.mutable_data<float>(), 
+            sub_cum_log_buf_1.mutable_data<float>(TARGET(kXPU)), 
             h_output_cum_log_probs_ptr1->data(), 
             batch_size*beam_width*sizeof(float), 
             IoDirection::HtoD);
@@ -1456,13 +1467,27 @@ public:
     sorted_ind_total_topk.Resize({batch_size, beam_width*2});
     xdnn_ret = xdnn::sorted_topk<float>(ctx_,
                                         sorted_beam_value.data<float>(),
-                                        sorted_value_total_topk.mutable_data<float>(TARGET(kXPU), sorted_value_total_topk.dims().production()*sizeof(float)),
-                                        sorted_ind_total_topk.mutable_data<int32_t>(TARGET(kXPU), sorted_ind_total_topk.dims().production()*sizeof(int32_t)),
+                                        sorted_value_total_topk.mutable_data<float>(TARGET(kXPU)),
+                                        sorted_ind_total_topk.mutable_data<int32_t>(TARGET(kXPU)),
                                         batch_size,
                                         beam_width * beam_width * 2,
                                         beam_width * 2);
     CHECK_EQ(xdnn_ret, 0) << "calling sorted_topk error.";
-
+    /*
+    {
+      vector<float> temp(8);
+      cout << "DDD STEP " << step << endl;
+      TargetWrapperXPU::MemcpySync(
+            temp.data(), 
+            sorted_value_total_topk.data<float>(), 
+            beam_width * 2 * sizeof(float), 
+            IoDirection::DtoH); 
+      for(auto v:temp) {
+        cout << v << '\t';
+      }
+      cout << endl;
+    }
+    */
     vector<int32_t> h_sorted_ind_beam_topk(batch_size * beam_width * beam_width * 2);
     vector<int32_t> h_sorted_ind_total_topk(batch_size * beam_width * 2);
     vector<float> h_sorted_value_total_topk(batch_size * beam_width * 2);
@@ -1509,7 +1534,7 @@ public:
 
     float length_penalty = std::pow((5. + step + 1) / 6., alpha);
     float max_length_penalty = std::pow((5. + max_out_len + 1) / 6., alpha);
-
+    // std::cout << "LENGTH: " << length_penalty << " MAX_LENGTH_PANALTY: " << max_length_penalty << std::endl;
     for(int32_t bs=0; bs<batch_size; bs++) {
       T* output_cum_log_probs_ptr0 = h_output_cum_log_probs_ptr0->data() + bs * beam_width;
       T* output_cum_log_probs_ptr1 = h_output_cum_log_probs_ptr1->data() + bs * beam_width;
@@ -1542,7 +1567,19 @@ public:
           if(finished_ptr[i] != 0) ++finish_num;
         }
       }
-
+      /*
+      std::cout << "DEBUG STEP = " << step << endl;
+      cout << "X: ";
+      for(int xx=0; xx<8; xx++) {
+        std::cout << h_sorted_ind_beam_topk_ptr[h_sorted_ind_total_topk_ptr[xx]] << '\t';
+      }
+      cout << endl;
+        cout << "Y: ";
+      for(int xx=0; xx<8; xx++) {
+        std::cout << h_sorted_value_total_topk_ptr[xx] << '\t';
+      }
+      cout << endl;    
+      */
       int32_t alive_num = 0;
       for(int32_t i=0; i<beam_width*2; i++) {
         int32_t word_id = h_sorted_ind_beam_topk_ptr[h_sorted_ind_total_topk_ptr[i]];
@@ -1569,7 +1606,7 @@ public:
       }
 
       std::sort(finish_candidate.begin(), finish_candidate.end(), 
-                [](TopKFinish<T> &a, TopKFinish<T>& b) {return a.u > b.u;});
+                [](TopKFinish<T>& a, TopKFinish<T>& b) {return a.u > b.u;});
       
       for(int32_t i=0; i<beam_width; i++) {
         output_word_ids_ptr[i] = end_id;
@@ -1601,10 +1638,24 @@ public:
       }
     } // end batch
     /*
-    if(step == 1) {
+    if(step == 1 || step == 2 || step == 3 || step == 4 ) {
+      std::cout << "STEP: " << step << std::endl;
       std::cout << "parent id " << std::endl;
       for(auto v : h_tmp_parent_ids_buf) {
         std::cout << v << '\t';
+      }
+      std::cout << std::endl;
+      std::cout << "word id " << std::endl;
+      for(auto v : h_tmp_word_ids_buf) {
+        std::cout << v << '\t';
+      }
+      std::cout << std::endl;
+      std::cout << "CUMM_LOG_PROB " << std::endl;
+      for(int xx=0; xx<4; xx++) {
+        std::cout << h_output_cum_log_probs_ptr0->at(xx) << '\t';
+      }
+      for(int xx=0; xx<4; xx++) {
+        std::cout << h_output_cum_log_probs_ptr1->at(xx) << '\t';
       }
       std::cout << std::endl;
     }
@@ -1630,6 +1681,9 @@ public:
             h_temp_alive_finished.data(), 
             batch_size * beam_width * sizeof(bool), 
             IoDirection::HtoD);
+    auto acc_res = std::accumulate(h_temp_finished.begin(), h_temp_finished.end(), 0);
+    return static_cast<int32_t>(acc_res);
+    // std::cout << "STEP: " << step << " FINISH ACC: " << acc_res << std::endl;  
   } // end topK_softMax_update
 
 
@@ -1884,7 +1938,6 @@ static void DecodingKernel(
   
   decoding_beam_search->forward(params, decoding_params);
 
-
   return;
 }
 
@@ -1933,14 +1986,11 @@ void FusionDecodingCompute::RunDecodingForward() {
   }
 
   param.output_ids_->Resize(output_dims);
-  param.output_ids_->mutable_data(TARGET(kHost), 
-                      param.output_ids_->dims().production()*sizeof(int32_t));
+  param.output_ids_->mutable_data<int32_t>(TARGET(kHost));
   param.parent_ids_->Resize(parent_ids_dims);
-  param.parent_ids_->mutable_data(TARGET(kHost), 
-                      param.parent_ids_->dims().production()*sizeof(int32_t));
+  param.parent_ids_->mutable_data<int32_t>(TARGET(kHost));
   param.sequence_length_->Resize(sequence_length_dims);
-  param.sequence_length_->mutable_data(TARGET(kHost), 
-                      param.sequence_length_->dims().production()*sizeof(int32_t));
+  param.sequence_length_->mutable_data<int32_t>(TARGET(kHost));
 
   DecodingKernel<float>(
     xpu_ctx,
