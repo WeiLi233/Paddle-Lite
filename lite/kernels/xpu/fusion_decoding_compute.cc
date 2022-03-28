@@ -165,7 +165,7 @@ struct TopKFinish {
 };
 
 
-template <typename T>
+template <typename T, typename TGEMM, typename TATTENTION>
 class OpenDecoder {
   baidu::xpu::api::Context *ctx_;
   const DecoderInitParam<T> *param_;
@@ -289,7 +289,7 @@ public:
     }
     */
     int32_t xdnn_ret;
-    xdnn_ret = xdnn::layer_norm<float>(ctx_,    
+    xdnn_ret = xdnn::layer_norm<T>(ctx_,    
                            from_tensor, 
                            norm_from_tensor_buf_,
                            max_batch_size_,
@@ -371,7 +371,7 @@ public:
       // start ffn()
       int32_t m = max_batch_size_;
       int32_t n = hidden_units_;
-      xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
+      xdnn_ret = xdnn::fc_fusion<T, T, T, TGEMM>(
           ctx_, /* context */
           norm_cross_output_buf_,          /* x */
           param_->ffn.intermediate_weight.kernel,
@@ -393,7 +393,7 @@ public:
           xdnn::Activation_t::RELU); /* act_type */
           CHECK_EQ(xdnn_ret, 0) << "calling ffn fc_fusion error!.";
 
-      xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
+      xdnn_ret = xdnn::fc_fusion<T, T, T, TGEMM>(
           ctx_, /* context */
           ffn_inner_buf_,          /* x */
           param_->ffn.output_weight.kernel,
@@ -453,7 +453,7 @@ public:
 
     int32_t xdnn_ret;
     if (is_fuse_QKV_in_normal_gemm_ == true) {
-      xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
+      xdnn_ret = xdnn::fc_fusion<T, T, T, TGEMM>(
       ctx_, /* context */
       from_tensor,          /* x */
       param_->self_attention.query_weight.kernel,
@@ -574,7 +574,7 @@ public:
                                     m * step,
                                     static_cast<T>(0));
               
-      xdnn_ret = xdnn::qk_attention<T, T, T, int32_t>(
+      xdnn_ret = xdnn::qk_attention<T, T, T, TATTENTION>(
           ctx_,
           broadcast_q_,
           key_cache,
@@ -598,7 +598,7 @@ public:
         }
       }
       */
-      xdnn_ret = xdnn::qk_v_attention<T, T, T, int32_t>(
+      xdnn_ret = xdnn::qk_v_attention<T, T, T, TATTENTION>(
           ctx_,
           qk_buffer_,
           value_cache,
@@ -634,7 +634,7 @@ public:
     }
     */
     
-    xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
+    xdnn_ret = xdnn::fc_fusion<T, T, T, TGEMM>(
       ctx_, /* context */
       context_buf_,          /* x */
       param_->self_attention.attention_output_weight.kernel,
@@ -670,7 +670,7 @@ public:
     int32_t n = hidden_units_;
 
     int32_t xdnn_ret;
-    xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
+    xdnn_ret = xdnn::fc_fusion<T, T, T, TGEMM>(
       ctx_, /* context */
       from_tensor,          /* x */
       param_->cross_attention.query_weight.kernel,
@@ -693,7 +693,7 @@ public:
       CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
     
     if(step == 1) {
-      xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
+      xdnn_ret = xdnn::fc_fusion<T, T, T, TGEMM>(
         ctx_, /* context */
         memory_tensor,          /* x */
         param_->cross_attention.key_weight.kernel,
@@ -715,7 +715,7 @@ public:
         xdnn::Activation_t::LINEAR); /* act_type */
       CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
 
-      xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
+      xdnn_ret = xdnn::fc_fusion<T, T, T, TGEMM>(
         ctx_, /* context */
         memory_tensor,          /* x */
         param_->cross_attention.value_weight.kernel,
@@ -744,6 +744,13 @@ public:
                         memory_sequence_length, 
                         m*sizeof(int32_t), 
                         IoDirection::DtoH); 
+      /*
+      std::cout << "max_seq_len is " << max_seq_len << std::endl;
+      std::cout << "m: " << m << std::endl;
+      for(auto x: memory_sequence_length_cpu) {
+        std::cout << x << std::endl;
+      }
+      */
       for(int32_t i=0; i<m; i++) {
         std::fill_n(tmp_float_finish_cpu.begin() + i*max_seq_len, 
                       memory_sequence_length_cpu[i], 
@@ -773,7 +780,7 @@ public:
                             {m, max_seq_len, n});
     CHECK_EQ(xdnn_ret, 0) << "broadcast error!.";
 
-    xdnn_ret = xdnn::qk_attention<T, T, T, int32_t>(
+    xdnn_ret = xdnn::qk_attention<T, T, T, TATTENTION>(
           ctx_,
           broadcast_q_,
           key_mem_cache,
@@ -786,7 +793,7 @@ public:
     CHECK_EQ(xdnn_ret, 0) << "cross attention qk_attention error.";
 
 
-    xdnn_ret = xdnn::qk_v_attention<T, T, T, int32_t>(
+    xdnn_ret = xdnn::qk_v_attention<T, T, T, TATTENTION>(
           ctx_,
           qk_buffer_,
           value_mem_cache,
@@ -824,7 +831,7 @@ public:
       */
     }
 
-    xdnn_ret = xdnn::fc_fusion<T, T, T, float>(
+    xdnn_ret = xdnn::fc_fusion<T, T, T, TGEMM>(
         ctx_, /* context */
         context_buf_,          /* x */
         param_->cross_attention.attention_output_weight.kernel,
@@ -848,7 +855,7 @@ public:
   } // end cross_multi_head_attention()
 };
 
-template<typename T>
+template<typename T, typename TGEMM, typename TATTENTION>
 class DecodingBeamsearch {
 private:
   DecodingBeamsearchArguments args_;
@@ -856,7 +863,7 @@ private:
   bool is_fuse_topk_softMax_{};
   bool keep_alive_beam_{};
 
-  std::unique_ptr<OpenDecoder<T>> decoder_{};
+  std::unique_ptr<OpenDecoder<T, TGEMM, TATTENTION>> decoder_{};
   //T **K_cache_{};
   //T **V_cache_{};
   array<T*, 2> K_cache_;
@@ -979,7 +986,8 @@ public:
     V_mem_cache_.resize(args_.decoder_layers_);
 
     // TODO: OpenDecoder
-    decoder_ = std::unique_ptr<OpenDecoder<T>>(new OpenDecoder<T>(ctx,
+    decoder_ = std::unique_ptr<OpenDecoder<T, TGEMM, TATTENTION>>(
+                           new OpenDecoder<T, TGEMM, TATTENTION>(ctx,
                                                         head_num,
                                                         size_per_head,
                                                         memory_hidden_units,
@@ -1287,8 +1295,8 @@ public:
         }
       } // end layer loop
       
-      /*
-      if(step == 2) {
+      
+      if(step == 2 || step == 1) {
           vector<float> attention_out(args_.batch_size_ * args_.beam_width_ * args_.hidden_units_);
           TargetWrapperXPU::MemcpySync(
               attention_out.data(), 
@@ -1300,10 +1308,10 @@ public:
             cout << i << '\t' << attention_out[i] << endl;
           }
       }
-      */
+      
       
       if(step > min_trg_len) {
-        xdnn_ret = xdnn::layer_norm<float>(ctx_,    
+        xdnn_ret = xdnn::layer_norm<T>(ctx_,    
                            from_tensor_[out_id], 
                            decoder_normed_result_buf_,
                            m,
@@ -1314,7 +1322,7 @@ public:
                            nullptr,
                            nullptr);
         
-        xdnn_ret = xdnn::fc_fusion<float, float, float, float>(
+        xdnn_ret = xdnn::fc_fusion<T, T, T, TGEMM>(
             ctx_, /* context */
             decoder_normed_result_buf_,          /* x */
             embedding_kernel_ptr,
@@ -1797,6 +1805,7 @@ static void DecodingKernel(
     const float beam_search_diversity_rate,
     const float alpha) {
   // TODO: this is for debugging, remove in the formal release
+  
   CHECK_EQ(input->numel(), 32*39*1024) << "input dimmension mismatch!";
   vector<float> cpu_input(32*39*1024);
   vector<int32_t> cpu_mem_seq_len(32);
@@ -1818,7 +1827,7 @@ static void DecodingKernel(
            cpu_mem_seq_len.data(), 
            32*sizeof(int32_t), 
            IoDirection::HtoD);
-
+  
   const int32_t beam_width = (decoding_strategy == "beam_search" ||
                     decoding_strategy == "beam_search_v2") ? 
                     beam_size : 1;
@@ -1910,10 +1919,12 @@ static void DecodingKernel(
   decoding_params.embedding_bias = embedding_bias->data<float>();
   decoding_params.position_encoding_table = positional_embedding_weight->data<float>();
 
-  std::unique_ptr<DecodingBeamsearch<float>> decoding_beam_search;
+  using type_gemm = int16_t;
+  using type_att = int16_t;
+  std::unique_ptr<DecodingBeamsearch<float, type_gemm, type_att>> decoding_beam_search;
   if(decoding_strategy == "beam_search_v2") {
-    decoding_beam_search = std::unique_ptr<DecodingBeamsearch<float>>(
-      new DecodingBeamsearch<float>(
+    decoding_beam_search = std::unique_ptr<DecodingBeamsearch<float, type_gemm, type_att>>(
+      new DecodingBeamsearch<float, type_gemm, type_att>(
           ctx,
           batch_size,
           beam_width,
