@@ -155,16 +155,6 @@ REGISTER_LITE_KERNEL(
                {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
     .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
     .Finalize();
-
-REGISTER_LITE_KERNEL(
-    gather, kXPU, kFloat, kNCHW, GatherXPUInt32Int32, gather_i64_i32)
-    .BindInput("X", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt64))})
-    .BindInput("Index",
-               {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
-    .BindInput("Axis",
-               {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
-    .BindOutput("Out", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt64))})
-    .Finalize();
 REGISTER_LITE_KERNEL(
     gather, kXPU, kFloat, kNCHW, GatherXPUInt64Int32, gather_i64_i32)
     .BindInput("X", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt64))})
