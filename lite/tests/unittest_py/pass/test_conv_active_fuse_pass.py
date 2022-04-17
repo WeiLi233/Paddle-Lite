@@ -31,17 +31,19 @@ import hypothesis.strategies as st
 class TestConvActiveFuse(FusePassAutoScanTest):
     def __init__(self, *args, **kwargs):
         FusePassAutoScanTest.__init__(self, *args, **kwargs)
-        arm_places = [
-            Place(TargetType.ARM, PrecisionType.FP32, DataLayoutType.NCHW),
-            Place(TargetType.ARM, PrecisionType.FP16, DataLayoutType.NCHW),
-            Place(TargetType.ARM, PrecisionType.INT8, DataLayoutType.NCHW)
-        ]
-        self.enable_testing_on_place(places=arm_places, thread=[1, 4])
+        self.enable_testing_on_place(
+            TargetType.ARM, [PrecisionType.FP32],
+            DataLayoutType.NCHW,
+            thread=[1, 4])
+        self.enable_testing_on_place(
+            TargetType.ARM, [PrecisionType.FP16],
+            DataLayoutType.NCHW,
+            thread=[1, 4])
         self.enable_testing_on_place(
             TargetType.X86, [PrecisionType.FP32],
             DataLayoutType.NCHW,
             thread=[1, 4])
-        #some case OpenCL not support 
+        #some case OpenCL not support
         opencl_places = [
             Place(TargetType.OpenCL, PrecisionType.FP16,
                   DataLayoutType.ImageDefault), Place(
@@ -71,14 +73,21 @@ class TestConvActiveFuse(FusePassAutoScanTest):
                          program_config: ProgramConfig,
                          predictor_config: CxxConfig) -> bool:
         result = True
-        if predictor_config.target() == TargetType.OpenCL:
-            filter_shape = list(program_config.weights["filter_data"].shape)
-            dilations = program_config.ops[0].attrs["dilations"]
-            if program_config.ops[0].attrs[
-                    "groups"] != 1 or program_config.ops[
-                        0].type == "conv2d_transpose" or dilations[0] == 2 or (
-                            filter_shape[2] == 3 and filter_shape[3] == 3):
-                result = False
+        if program_config.ops[1].type == "sigmoid" and predictor_config.target(
+        ) != TargetType.OpenCL:
+            result = False
+        if program_config.ops[1].type == "tanh" and predictor_config.target(
+        ) != TargetType.OpenCL:
+            result = False
+        if program_config.ops[1].type == "swish" and predictor_config.target(
+        ) != TargetType.OpenCL:
+            result = False
+        if program_config.ops[1].type == "exp" and predictor_config.target(
+        ) != TargetType.OpenCL:
+            result = False
+        if program_config.ops[1].type == "abs" and predictor_config.target(
+        ) != TargetType.OpenCL:
+            result = False
         if program_config.ops[0].type == "conv2d_transpose":  #TODO
             result = result and program_config.ops[
                 1].type != "hard_swish" and program_config.ops[
@@ -142,6 +151,7 @@ class TestConvActiveFuse(FusePassAutoScanTest):
         threshold = draw(st.floats(min_value=0, max_value=1))
         alpha = draw(st.floats(min_value=0, max_value=1))
         scale = draw(st.floats(min_value=0.5, max_value=5))
+        beta_data = draw(st.floats(min_value=0.0, max_value=1.0))
         offset = draw(st.floats(min_value=0, max_value=1))
         slope = draw(st.floats(min_value=0.7, max_value=0.9))
 
@@ -200,8 +210,17 @@ class TestConvActiveFuse(FusePassAutoScanTest):
 
         act_type = draw(
             st.sampled_from([
-                'relu', 'relu6', 'leaky_relu', 'hard_swish', 'prelu',
-                'hard_sigmoid'
+                'relu',
+                'relu6',
+                'leaky_relu',
+                'hard_swish',
+                'prelu',
+                'hard_sigmoid',
+                'sigmoid',
+                'tanh',
+                'swish',
+                # 'exp',
+                'abs',
             ]))
 
         def generate_act_attrs(act_type_str):
@@ -216,6 +235,8 @@ class TestConvActiveFuse(FusePassAutoScanTest):
                     "scale": scale,
                     "offset": offset
                 }
+            if act_type_str == 'swish':
+                attrs = {"beta": beta_data}
             if act_type_str == "prelu":
                 attrs = {"mode": mode_data, "data_format": "NCHW"}
             if act_type_str == "hard_sigmoid":
@@ -297,7 +318,7 @@ class TestConvActiveFuse(FusePassAutoScanTest):
     def test(self, *args, **kwargs):
         self.run_and_statis(
             quant=False,
-            max_examples=300,
+            max_examples=400,
             passes=["lite_conv_active_fuse_pass"])
 
 

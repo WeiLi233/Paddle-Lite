@@ -47,12 +47,6 @@ class TestPad2dOp(AutoScanTest):
             PrecisionType.FP32,
             DataLayoutType.NCHW,
             thread=[1, 4])
-        # Diff occurred.
-        # self.enable_testing_on_place(
-        #     TargetType.ARM,
-        #     PrecisionType.FP16,
-        #     DataLayoutType.NCHW,
-        #     thread=[1, 4])
         opencl_places = [
             Place(TargetType.OpenCL, PrecisionType.FP16,
                   DataLayoutType.ImageDefault),
@@ -74,6 +68,11 @@ class TestPad2dOp(AutoScanTest):
                   DataLayoutType.MetalTexture2DArray)
         ]
         self.enable_testing_on_place(places=metal_places)
+        self.enable_testing_on_place(
+            TargetType.ARM,
+            PrecisionType.FP16,
+            DataLayoutType.NCHW,
+            thread=[1, 4])
 
     def is_program_valid(self,
                          program_config: ProgramConfig,
@@ -91,6 +90,7 @@ class TestPad2dOp(AutoScanTest):
             st.lists(
                 st.integers(
                     min_value=0, max_value=4), min_size=4, max_size=4))
+        data_format = draw(st.sampled_from(["NCHW", "NHWC"]))
         for i in range(4):
             assume(padding_data[i] < in_shape[1])
             assume(padding_data[i] < in_shape[2])
@@ -113,7 +113,7 @@ class TestPad2dOp(AutoScanTest):
                 "paddings": padding_data,
                 "mode": mode,
                 "pad_value": value_data,
-                "data_format": "NCHW",
+                "data_format": data_format,
             })
         program_config = ProgramConfig(
             ops=[build_ops],
@@ -134,10 +134,20 @@ class TestPad2dOp(AutoScanTest):
         return self.get_predictor_configs(), ["pad2d"], (atol, rtol)
 
     def add_ignore_pass_case(self):
-        pass
+        def _teller1(program_config, predictor_config):
+            target_type = predictor_config.target()
+            data_format = program_config.ops[0].attrs["data_format"]
+            if target_type in [TargetType.OpenCL, TargetType.Metal
+                               ] and data_format == "NHWC":
+                return True
+
+        self.add_ignore_check_case(
+            _teller1, IgnoreReasons.ACCURACY_ERROR,
+            "Lite doesn't not support for NHWC pad2d on ARM && fp16, and on Metal and OpenCL"
+        )
 
     def test(self, *args, **kwargs):
-        self.run_and_statis(quant=False, max_examples=25)
+        self.run_and_statis(quant=False, max_examples=100)
 
 
 if __name__ == "__main__":

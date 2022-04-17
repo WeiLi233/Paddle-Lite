@@ -35,6 +35,10 @@ class TestFlattenContiguousRangeOp(AutoScanTest):
             PrecisionType.Any,
             DataLayoutType.Any,
             thread=[1, 4])
+        self.enable_testing_on_place(TargetType.NNAdapter, PrecisionType.FP32)
+        self.enable_devices_on_nnadapter(device_names=[
+            "kunlunxin_xtcl", "cambricon_mlu", "nvidia_tensorrt"
+        ])
 
     def is_program_valid(self,
                          program_config: ProgramConfig,
@@ -67,6 +71,16 @@ class TestFlattenContiguousRangeOp(AutoScanTest):
             st.integers(
                 min_value=start_axis, max_value=len(in_shape) - 1))
 
+        outputs_ = ["output_data", "xshape_data"]
+        target_str = self.get_target()
+        if target_str == "NNAdapter":
+            if "nvidia_tensorrt" in self.get_nnadapter_device_name():
+                assume(input_type != "int64")
+
+        if self.get_target().upper() == "NNADAPTER":
+            if "nvidia_tensorrt" in self.get_nnadapter_device_name():
+                outputs_ = ["output_data"]
+
         flatten_contiguous_range_op = OpConfig(
             type="flatten_contiguous_range",
             inputs={"X": ["input_data"]},
@@ -74,7 +88,7 @@ class TestFlattenContiguousRangeOp(AutoScanTest):
                      "XShape": ["xshape_data"]},
             attrs={"start_axis": start_axis,
                    "stop_axis": stop_axis})
-
+        flatten_contiguous_range_op.outputs_dtype = {"output_data": input_type}
         program_config = ProgramConfig(
             ops=[flatten_contiguous_range_op],
             weights={"xshape_data": TensorConfig(shape=in_shape)},
@@ -86,7 +100,7 @@ class TestFlattenContiguousRangeOp(AutoScanTest):
                     high=10,
                     shape=in_shape))
             },
-            outputs=["output_data", "xshape_data"])
+            outputs=outputs_)
 
         return program_config
 
@@ -95,15 +109,16 @@ class TestFlattenContiguousRangeOp(AutoScanTest):
             1e-5, 1e-5)
 
     def add_ignore_pass_case(self):
-        def _teller1(program_config, predictor_config):
-            if predictor_config.target() == TargetType.Host:
-                in_dtype = program_config.inputs["input_data"].dtype
-                if in_dtype != "float32":
+        def teller1(program_config, predictor_config):
+            if "nvidia_tensorrt" in self.get_nnadapter_device_name():
+                in_shape = program_config.inputs["input_data"].shape
+                start_axis = program_config.ops[0].attrs["start_axis"]
+                if len(in_shape) == 1 or start_axis == 0:
                     return True
 
         self.add_ignore_check_case(
-            _teller1, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
-            "Lite does not support this op in a specific case on opencl. We need to fix it as soon as possible."
+            teller1, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
+            "Lite does not support 'in_shape_size == 1' or 'start_axis == 0' on NvidiaTensorrt."
         )
 
     def test(self, *args, **kwargs):

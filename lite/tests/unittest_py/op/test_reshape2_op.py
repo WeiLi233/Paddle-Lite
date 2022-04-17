@@ -62,6 +62,10 @@ class TestReshape2Op(AutoScanTest):
                   DataLayoutType.MetalTexture2DArray)
         ]
         self.enable_testing_on_place(places=metal_places)
+        self.enable_testing_on_place(TargetType.NNAdapter, PrecisionType.FP32)
+        self.enable_devices_on_nnadapter(device_names=[
+            "kunlunxin_xtcl", "cambricon_mlu", "nvidia_tensorrt"
+        ])
 
     def is_program_valid(self,
                          program_config: ProgramConfig,
@@ -116,7 +120,16 @@ class TestReshape2Op(AutoScanTest):
         return self.get_predictor_configs(), ["reshape2"], (atol, rtol)
 
     def add_ignore_pass_case(self):
-        pass
+        def teller1(program_config, predictor_config):
+            if self.get_nnadapter_device_name() == "nvidia_tensorrt":
+                in_shape = program_config.inputs["input_data"].shape
+                shape = program_config.ops[0].attrs["shape"]
+                if in_shape[0] != shape[0]:
+                    return True
+
+        self.add_ignore_check_case(
+            teller1, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
+            "Lite does not support change batch on nvidia_tensorrt.")
 
     def test(self, *args, **kwargs):
         self.run_and_statis(quant=False, max_examples=200)

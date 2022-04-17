@@ -407,7 +407,7 @@ void sgemm_prepack(bool is_transB,
                             has_bias,
                             act_param,
                             ctx);
-  } else if (ctx->arch() == kA53) {
+  } else if (ctx->has_a53_valid()) {  // fix xiaodu run crash in long time
     auto act_type = act_param.active_type;
     bool has_act = act_param.has_active;
     bool act_flag =
@@ -5044,7 +5044,7 @@ void sgemm_prepacked_8x12_a53(bool is_transB,
                 LEAKY1 LEAKY2
                 "b      20f                    \n" /* leakey relu end */
                 // hard swish
-                "14:                           \n"
+                "15:                           \n"
                 "ldr    q1,  [%[alpha], #0]    \n"
                 "ldr    q2,  [%[alpha], #16]   \n"
                 "movi   v0.4s,    #0           \n"

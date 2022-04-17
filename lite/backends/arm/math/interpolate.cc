@@ -23,28 +23,6 @@ namespace lite {
 namespace arm {
 namespace math {
 
-inline std::vector<int> get_new_shape(
-    std::vector<const lite::Tensor*> list_new_shape_tensor) {
-  // get tensor from
-  std::vector<int> vec_new_shape;
-  for (size_t i = 0; i < list_new_shape_tensor.size(); ++i) {
-    auto tensor = list_new_shape_tensor[i];
-    vec_new_shape.push_back(static_cast<int32_t>(*tensor->data<int32_t>()));
-  }
-
-  return vec_new_shape;
-}
-
-template <typename T>
-inline std::vector<T> get_new_data_from_tensor(const Tensor* new_data_tensor) {
-  std::vector<T> vec_new_data;
-  auto* new_data = new_data_tensor->data<T>();
-  lite::Tensor cpu_starts_tensor;
-  vec_new_data =
-      std::vector<T>(new_data, new_data + new_data_tensor->dims().production());
-  return vec_new_data;
-}
-
 // The following function bilinear_interp is partially base on
 // https://github.com/Tencent/ncnn/blob/master/src/layer/arm/interp_arm.cpp
 // Tencent is pleased to support the open source community by making ncnn
@@ -85,6 +63,7 @@ void bilinear_interp(const float* src,
   float fy = 0.0f;
   int sx = 0;
   int sy = 0;
+  int loop_cnt_idx = w_out;
   if (with_align) {
     scale_x = static_cast<float>(w_in - 1) / (w_out - 1);
     scale_y = static_cast<float>(h_in - 1) / (h_out - 1);
@@ -94,7 +73,12 @@ void bilinear_interp(const float* src,
       sx = static_cast<int>(fx);
       fx -= sx;
       xofs[dx * 2] = sx;
-      xofs[dx * 2 + 1] = (sx + 1) < w_in - 1 ? (sx + 1) : (w_in - 1);
+      if ((sx + 1) < w_in - 1) {
+        xofs[dx * 2 + 1] = sx + 1;
+      } else {
+        loop_cnt_idx = (loop_cnt_idx == w_out) ? dx : loop_cnt_idx;
+        xofs[dx * 2 + 1] = w_in - 1;
+      }
       alpha[dx * 2] = 1.f - fx;
       alpha[dx * 2 + 1] = fx;
     }
@@ -118,7 +102,12 @@ void bilinear_interp(const float* src,
       sx = static_cast<int>(fx);
       fx -= sx;
       xofs[dx * 2] = sx;
-      xofs[dx * 2 + 1] = (sx + 1) < w_in - 1 ? (sx + 1) : (w_in - 1);
+      if ((sx + 1) < w_in - 1) {
+        xofs[dx * 2 + 1] = sx + 1;
+      } else {
+        loop_cnt_idx = (loop_cnt_idx == w_out) ? dx : loop_cnt_idx;
+        xofs[dx * 2 + 1] = w_in - 1;
+      }
       alpha[dx * 2] = 1.f - fx;
       alpha[dx * 2 + 1] = fx;
     }
@@ -161,24 +150,25 @@ void bilinear_interp(const float* src,
     float* rows1p = rows1;
 
     int dx = 0;
+    int idx = dx * 2;
+    int sx0 = xofs[idx];
+    int sx1 = xofs[idx + 1];
     // w_bound loop
-    for (; dx + 1 < w_bound; dx += 2) {
+    for (; dx + 1 < w_bound && dx + 1 < loop_cnt_idx; dx += 2) {
       auto idx = dx * 2;
       int sx = xofs[idx];
-      int sx1 = xofs[idx + 1];
       int sxn = xofs[idx + 2];
-      int sxn1 = xofs[idx + 3];
+      const float* s0p = s0 + sx;
+      const float* s1p = s1 + sx;
+      const float* s0np = s0 + sxn;
+      const float* s1np = s1 + sxn;
+      float32x2_t _s0 = vld1_f32(s0p);
+      float32x2_t _s1 = vld1_f32(s1p);
+      float32x2_t _s0n = vld1_f32(s0np);
+      float32x2_t _s1n = vld1_f32(s1np);
 
-      float32x4_t _s0s0n;
-      _s0s0n[0] = *(s0 + sx);
-      _s0s0n[1] = *(s0 + sx1);
-      _s0s0n[2] = *(s0 + sxn);
-      _s0s0n[3] = *(s0 + sxn1);
-      float32x4_t _s1s1n;
-      _s1s1n[0] = *(s1 + sx);
-      _s1s1n[1] = *(s1 + sx1);
-      _s1s1n[2] = *(s1 + sxn);
-      _s1s1n[3] = *(s1 + sxn1);
+      float32x4_t _s0s0n = vcombine_f32(_s0, _s0n);
+      float32x4_t _s1s1n = vcombine_f32(_s1, _s1n);
 
       float32x4_t _a = vld1q_f32(alphap);
       float32x4_t _ms0 = vmulq_f32(_s0s0n, _a);
@@ -323,22 +313,21 @@ void bilinear_interp(const float* src,
 
     int dx = 0;
     // w_bound loop
-    for (; dx + 1 < w_bound; dx += 2) {
+    for (; dx + 1 < w_bound && dx + 1 < loop_cnt_idx; dx += 2) {
       int idx = dx * 2;
       int sx = xofs[idx];
-      int sx1 = xofs[idx + 1];
       int sxn = xofs[idx + 2];
-      int sxn1 = xofs[idx + 3];
-      float32x4_t _s0s0n;
-      _s0s0n[0] = *(s0 + sx);
-      _s0s0n[1] = *(s0 + sx1);
-      _s0s0n[2] = *(s0 + sxn);
-      _s0s0n[3] = *(s0 + sxn1);
-      float32x4_t _s1s1n;
-      _s1s1n[0] = *(s1 + sx);
-      _s1s1n[1] = *(s1 + sx1);
-      _s1s1n[2] = *(s1 + sxn);
-      _s1s1n[3] = *(s1 + sxn1);
+      const float* s0p = s0 + sx;
+      const float* s1p = s1 + sx;
+      const float* s0np = s0 + sxn;
+      const float* s1np = s1 + sxn;
+      float32x2_t _s0 = vld1_f32(s0p);
+      float32x2_t _s1 = vld1_f32(s1p);
+      float32x2_t _s0n = vld1_f32(s0np);
+      float32x2_t _s1n = vld1_f32(s1np);
+
+      float32x4_t _s0s0n = vcombine_f32(_s0, _s0n);
+      float32x4_t _s1s1n = vcombine_f32(_s1, _s1n);
 
       float32x4_t _a = vld1q_f32(alphap);
       float32x4_t _ms0 = vmulq_f32(_s0s0n, _a);
@@ -480,27 +469,21 @@ void nearest_interp(const float* src,
                     float scale_x,
                     float scale_y,
                     bool with_align) {
-  float scale_w_new = (with_align)
-                          ? (static_cast<float>(w_in - 1) / (w_out - 1))
-                          : (static_cast<float>(w_in) / (w_out));
-  float scale_h_new = (with_align)
-                          ? (static_cast<float>(h_in - 1) / (h_out - 1))
-                          : (static_cast<float>(h_in) / (h_out));
   if (with_align) {
     for (int h = 0; h < h_out; ++h) {
       float* dst_p = dst + h * w_out;
-      int near_y = static_cast<int>(scale_h_new * h + 0.5);
+      int near_y = static_cast<int>(scale_y * h + 0.5);
       for (int w = 0; w < w_out; ++w) {
-        int near_x = static_cast<int>(scale_w_new * w + 0.5);
+        int near_x = static_cast<int>(scale_x * w + 0.5);
         *dst_p++ = src[near_y * w_in + near_x];
       }
     }
   } else {
     for (int h = 0; h < h_out; ++h) {
       float* dst_p = dst + h * w_out;
-      int near_y = static_cast<int>(scale_h_new * h);
+      int near_y = static_cast<int>(scale_y * h);
       for (int w = 0; w < w_out; ++w) {
-        int near_x = static_cast<int>(scale_w_new * w);
+        int near_x = static_cast<int>(scale_x * w);
         *dst_p++ = src[near_y * w_in + near_x];
       }
     }
@@ -590,6 +573,13 @@ void interpolate(lite::Tensor* X,
   int spatial_in = in_h * in_w;
   int spatial_out = out_h * out_w;
 
+  float scale_w_new = (with_align)
+                          ? (static_cast<float>(in_w - 1) / (out_w - 1))
+                          : (static_cast<float>(in_w) / (out_w));
+  float scale_h_new = (with_align)
+                          ? (static_cast<float>(in_h - 1) / (out_h - 1))
+                          : (static_cast<float>(in_h) / (out_h));
+
   if ("Bilinear" == interpolate_type) {
     LITE_PARALLEL_BEGIN(i, tid, count) {
       bilinear_interp(din + spatial_in * i,
@@ -612,8 +602,8 @@ void interpolate(lite::Tensor* X,
                      dout + spatial_out * i,
                      out_w,
                      out_h,
-                     1.f / width_scale,
-                     1.f / height_scale,
+                     scale_w_new,
+                     scale_h_new,
                      with_align);
     }
     LITE_PARALLEL_END()

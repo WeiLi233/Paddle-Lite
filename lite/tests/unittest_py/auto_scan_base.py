@@ -17,6 +17,7 @@ import unittest
 import abc
 import os
 import sys
+import platform
 import enum
 import time
 import logging
@@ -49,6 +50,31 @@ parser.add_argument(
     ],
     required=True)
 parser.add_argument(
+    "--enforce_rpc", default='off', type=str, help="whther rpc is enforced")
+
+parser.add_argument(
+    "--server_ip",
+    default="localhost",
+    type=str,
+    help="when rpc is used , the ip address of the server")
+
+parser.add_argument(
+    "--url",
+    type=str,
+    help="Address of model download in model test", )
+parser.add_argument(
+    "--file_name",
+    type=str,
+    help="File name of the compressed model package downloaded in the model test",
+)
+parser.add_argument(
+    "--model_name",
+    type=str,
+    help="Model name(That is, the prefix of the compressed package) in model test",
+)
+parser.add_argument(
+    "--input_shapes", help="The tested model's input_shapes", action="append")
+parser.add_argument(
     "--nnadapter_device_names",
     default="",
     type=str,
@@ -73,6 +99,8 @@ parser.add_argument(
     default="",
     type=str,
     help="Set nnadapter mixed precision quantization config path")
+args = parser.parse_args()
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 settings.register_profile(
@@ -121,6 +149,7 @@ class AutoScanBaseTest(unittest.TestCase):
         self.available_passes_in_framework = set()
         args = parser.parse_args()
         self.args = args
+        self.vaild_nnadapter_device_names = []
 
     @abc.abstractmethod
     def sample_program_configs(self, draw):
@@ -128,6 +157,10 @@ class AutoScanBaseTest(unittest.TestCase):
         Generate all config with the combination of different Input tensor shape and
         different Attr values.
         '''
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def prepare_input_data(self, draw):
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -148,7 +181,7 @@ class AutoScanBaseTest(unittest.TestCase):
                          predictor_config: CxxConfig) -> bool:
         return True
 
-    def run_test_config(self, model, params, prog_config, pred_config,
+    def run_test_config(self, model, params, pred_config,
                         feed_data) -> Dict[str, np.ndarray]:
         '''
         Test a single case.
@@ -158,25 +191,156 @@ class AutoScanBaseTest(unittest.TestCase):
         self.available_passes_in_framework = self.available_passes_in_framework | set(
             pred_config.pass_builder().all_passes())
 
-        for name, _ in prog_config.inputs.items():
+        for name in feed_data:
             input_tensor = predictor.get_input_handle(name)
             input_tensor.copy_from_cpu(feed_data[name]['data'])
             if feed_data[name]['lod'] is not None:
                 input_tensor.set_lod(feed_data[name]['lod'])
         predictor.run()
         result = {}
-        for out_name, o_name in zip(prog_config.outputs,
-                                    predictor.get_output_names()):
-            result[out_name] = predictor.get_output_handle(o_name).copy_to_cpu(
-            )
+        for o_name in predictor.get_output_names():
+            result[o_name] = predictor.get_output_handle(o_name).copy_to_cpu()
         return result
+
+    # count FP16 precision diff
+    def count_fp16_diff(self, arr, base, atol, rtol) -> bool:
+        diff = abs(arr - base)
+        if len(diff) <= 0:
+            pass
+        max_diff = max(diff)
+        check = False
+        max_val = 0.0
+        max_index = 0
+        if max_diff > atol:
+            print("max_diff: ", max_diff)
+            size = len(arr)
+            count = 0
+            check = False
+            for i in range(size):
+                rel_val = diff[i] / max(arr[i], base[i])
+                if (diff[i] > 1e-1 and abs(rel_val > rtol)):
+                    if max_val < rel_val:
+                        max_val = rel_val
+                        max_index = i
+                    check = True
+            if check:
+                print("max_val and max_index: ", max_val, max_index)
+                print("value: ", base[max_index], arr[max_index],
+                      diff[max_index])
+                print("FP16 Output has diff. ")
+                return False
+            else:
+                return True
+        return True
+
+    # count shape diff and data diff
+    def count_shape_and_diff(self, base, arr, atol, rtol, flag_precision_fp16):
+        base_shape = base.shape
+        arr_shape = arr.shape
+        base_len = len(base_shape)
+        arr_len = len(arr_shape)
+        diff_len = abs(base_len - arr_len)
+        if diff_len == 1:
+            # base=[1, K], arr=[k]
+            if base_len > arr_len and (base_shape[0] == 1 or
+                                       base_shape[-1] == 1):
+                new_shape = base_shape[0:base_len - 1]
+                if base_shape[0] == 1:
+                    for i in range(1, base_len):
+                        if i != 0:
+                            new_shape[i - 1] = base_shape[i]
+
+                self.assertTrue(
+                    new_shape == arr_shape,
+                    "The output shapes are not equal, the baseline shape is " +
+                    str(new_shape) + ', but got ' + str(arr.shape))
+                if flag_precision_fp16:
+                    # count diff
+                    arr_value = arr.flatten()
+                    base_value = base.flatten()
+                    # return true: has diff
+                    res = self.count_fp16_diff(arr_value, base_value, atol,
+                                               rtol)
+                    self.assertTrue(res, "Output has diff. ")
+                else:
+                    diff = abs(base - arr)
+                    self.assertTrue(
+                        np.allclose(
+                            base.flatten(),
+                            arr.flatten(),
+                            atol=atol,
+                            rtol=rtol),
+                        "Output has diff, max_diff : {}, index : {}.\nbase={}, \narr={}".
+                        format(diff.max(), diff.argmax(), base, arr))
+            # arr=[1, K], base=[k]
+            elif base_len < arr_len and (arr_shape[0] == 1 or
+                                         arr_shape[-1] == 1):
+                new_shape = arr_shape[0:arr_len - 1]
+                if arr_shape[0] == 1:
+                    for i in range(1, arr_len):
+                        new_shape[i - 1] = arr_shape[i]
+                self.assertTrue(
+                    new_shape == base_shape,
+                    "The output shapes are not equal, the baseline shape is " +
+                    str(base.shape) + ', but got ' + str(new_shape))
+
+                if flag_precision_fp16:
+                    # count diff
+                    arr_value = arr.flatten()
+                    base_value = base.flatten()
+                    # return true: has diff
+                    res = self.count_fp16_diff(arr_value, base_value, atol,
+                                               rtol)
+                    self.assertTrue(res, "Output has diff. ")
+                else:
+                    diff = abs(base - arr)
+                    self.assertTrue(
+                        np.allclose(
+                            base.flatten(),
+                            arr.flatten(),
+                            atol=atol,
+                            rtol=rtol),
+                        "Output has diff, max_diff : {}, index : {}.\nbase={}, \narr={}".
+                        format(diff.max(), diff.argmax(), base, arr))
+            else:
+                self.assertTrue(
+                    base.shape == arr.shape,
+                    "The output shapes are not equal, the baseline shape is " +
+                    str(base.shape) + ', but got ' + str(arr.shape))
+        else:
+            self.assertTrue(
+                base.shape == arr.shape,
+                "The output shapes are not equal, the baseline shape is " +
+                str(base.shape) + ', but got ' + str(arr.shape))
+            if flag_precision_fp16:
+                # count diff
+                arr_value = arr.flatten()
+                base_value = base.flatten()
+                # return False: has diff
+                res = self.count_fp16_diff(arr_value, base_value, atol, rtol)
+                self.assertTrue(res, "Output has diff. ")
+            else:
+                diff = abs(base - arr)
+                if diff.size != 0:
+                    self.assertTrue(
+                        np.allclose(
+                            base, arr, atol=atol, rtol=rtol),
+                        "Output has diff, max_diff : {}, index : {}.\nbase={}, \narr={}".
+                        format(diff.max(), diff.argmax(), base, arr))
+                else:
+                    self.assertTrue(
+                        np.allclose(
+                            base, arr, atol=atol, rtol=rtol),
+                        "Output has diff,\nbase={}, \narr={}".format(base,
+                                                                     arr))
 
     @abc.abstractmethod
     def assert_tensors_near(self,
                             atol: float,
                             rtol: float,
                             tensor: Dict[str, np.array],
-                            baseline: Dict[str, np.array]):
+                            baseline: Dict[str, np.array],
+                            flag_precision_fp16: False):
         if len(tensor) == 0 and len(baseline) == 0:
             return
         if len(tensor) == 1 and len(baseline) == 1:
@@ -188,25 +352,19 @@ class AutoScanBaseTest(unittest.TestCase):
             if not base.shape and arr.shape == (1, ):
                 pass
             else:
-                self.assertTrue(
-                    base.shape == arr.shape,
-                    "The output shapes are not equal, the baseline shape is " +
-                    str(base.shape) + ', but got ' + str(arr.shape))
-            self.assertTrue(
-                np.allclose(
-                    base, arr, atol=atol, rtol=rtol),
-                "Output has diff. ")
+                self.count_shape_and_diff(base, arr, atol, rtol,
+                                          flag_precision_fp16)
         else:
             for key in tensor:
-                opencl_str = "/target_trans"
-                other_str = "__Mangled_1"
-                index = key.rfind(opencl_str)
+                suffix_str = [
+                    "/target_trans", "__Mangled_1", "/precision_trans"
+                ]
                 paddlekey = key
-                if index > 0:
-                    paddlekey = key[0:index]
-                index = key.rfind(other_str)
-                if index > 0:
-                    paddlekey = key[0:index]
+                for s_str in suffix_str:
+                    index = key.rfind(s_str)
+                    if index > 0:
+                        paddlekey = key[0:index]
+
                 if (paddlekey == "saved_mean" or
                         paddlekey == "saved_variance" or
                         paddlekey == "mean_data" or
@@ -214,15 +372,8 @@ class AutoScanBaseTest(unittest.TestCase):
                     # training using data
                     continue
                 arr = np.array(tensor[key])
-                self.assertTrue(
-                    baseline[paddlekey].shape == arr.shape,
-                    "The output shapes are not equal, the baseline shape is " +
-                    str(baseline[paddlekey].shape) + ', but got ' +
-                    str(arr.shape))
-                self.assertTrue(
-                    np.allclose(
-                        baseline[paddlekey], arr, atol=atol, rtol=rtol),
-                    "Output has diff. ")
+                self.count_shape_and_diff(baseline[paddlekey], arr, atol, rtol,
+                                          flag_precision_fp16)
 
     def generate_op_config(self,
                            ops_config: List[Dict[str, Any]]) -> List[OpConfig]:
@@ -250,6 +401,14 @@ class AutoScanBaseTest(unittest.TestCase):
         logging.info("SUCCESS: " + msg)
 
     @abc.abstractmethod
+    def is_model_test(self) -> bool:
+        return False
+
+    @abc.abstractmethod
+    def get_model(self, draw):
+        raise NotImplementedError
+
+    @abc.abstractmethod
     def create_inference_config(self,
                                 passes: Optional[List[str]]=None,
                                 use_gpu: bool=False,
@@ -268,6 +427,18 @@ class AutoScanBaseTest(unittest.TestCase):
             config.pass_builder().set_passes(passes)
         return config
 
+    @abc.abstractmethod
+    def insert_leaky_relu_op(self, prog_configs=None):
+        alpha_data = 0.01
+        leaky_relu_op = OpConfig(
+            type="leaky_relu",
+            inputs={"X": []},
+            outputs={"Out": ["output_act_data"]},
+            attrs={"alpha": alpha_data})
+        leaky_relu_op.inputs["X"].append(prog_configs.outputs[0])
+        prog_configs.ops.append(leaky_relu_op)
+        prog_configs.outputs[0] = "output_act_data"
+
     def run_test(self, quant=False, prog_configs=None):
         status = True
 
@@ -276,7 +447,20 @@ class AutoScanBaseTest(unittest.TestCase):
         for prog_config in prog_configs:
 
             predictor_idx = -1
+            cnt = 0
             for paddlelite_config in paddlelite_configs:
+                flag_precision_fp16 = False
+                if paddlelite_config.precision(
+                ) == PrecisionType.FP16 and paddlelite_config.target(
+                ) == TargetType.ARM:
+                    flag_precision_fp16 = True
+                if paddlelite_config.precision(
+                ) == PrecisionType.INT8 and paddlelite_config.target(
+                ) == TargetType.ARM:
+                    quant = True
+                else:
+                    quant = False
+
                 predictor_idx += 1
                 # judge validity of program
                 if not self.is_program_valid(prog_config, paddlelite_config):
@@ -284,11 +468,29 @@ class AutoScanBaseTest(unittest.TestCase):
                     continue
                 self.num_ran_programs_list[predictor_idx] += 1
 
+                if flag_precision_fp16:
+                    if platform.system() == 'Linux':
+                        # only run in M1
+                        continue
                 # creat model and prepare feed data
-                model, params = create_fake_model(prog_config)
+                if flag_precision_fp16:
+                    atol_ = 1e-1
+                    rtol_ = 5.3e-2
                 if quant:
+                    if platform.system() == 'Darwin' or platform.processor(
+                    ) == 'x86_64':
+                        # only run in linux
+                        continue
+                    atol_ = 8e-3
+                    rtol_ = 8e-3
+                    if cnt == 0:
+                        self.insert_leaky_relu_op(prog_config)
+                    cnt = cnt + 1
+                    model, params = create_fake_model(prog_config)
                     model, params = create_quant_model(
                         model, params, self.cache_dir, prog_config)
+                else:
+                    model, params = create_fake_model(prog_config)
 
                 feed_data = {}
                 for name, tensor_config in prog_config.inputs.items():
@@ -347,8 +549,8 @@ class AutoScanBaseTest(unittest.TestCase):
                 base_config = self.create_inference_config(ir_optim=False)
                 logging.info('[ProgramConfig]: ' + str(prog_config))
                 results.append(
-                    self.run_test_config(model, params, prog_config,
-                                         base_config, feed_data))
+                    self.run_test_config(model, params, base_config,
+                                         feed_data))
                 if paddle_lite_not_support_flag:
                     gl.set_lite_not_supported_ops(
                         self.get_target(),
@@ -361,13 +563,14 @@ class AutoScanBaseTest(unittest.TestCase):
                     os.mkdir(self.cache_dir)
                 try:
                     result, opt_model_bytes = self.run_lite_config(
-                        model, params, feed_data, pred_config)
+                        model, params, feed_data, pred_config, args.server_ip)
                     results.append(result)
                     # add ignore methods
                     if self.passes is not None:  # pass check
                         if not accuracy_error_flag:
                             self.assert_tensors_near(atol_, rtol_, results[-1],
-                                                     results[0])
+                                                     results[0],
+                                                     flag_precision_fp16)
                         if not op_fusion_error_flag:
                             self.assert_op_list(opt_model_bytes, op_list_)
                     else:  # op check
@@ -375,7 +578,8 @@ class AutoScanBaseTest(unittest.TestCase):
                                                 paddlelite_config)
                         if not accuracy_error_flag:
                             self.assert_tensors_near(atol_, rtol_, results[-1],
-                                                     results[0])
+                                                     results[0],
+                                                     flag_precision_fp16)
                 except Exception as e:
                     self.fail_log(
                         self.paddlelite_config_str(pred_config) +
@@ -387,6 +591,43 @@ class AutoScanBaseTest(unittest.TestCase):
         self.assertTrue(status)
         gl.set_success_ops(self.get_target(),
                            self.get_nnadapter_device_name(), sys.argv[0])
+
+    def run_model_test(self, inputs_configs=None, model=None, params=None):
+        status = True
+        paddlelite_configs, _, (atol_, rtol_) = self.sample_predictor_configs()
+        for inputs_config in inputs_configs:
+            feed_data = {}
+            for name, tensor_config in inputs_config.items():
+                feed_data[name] = {
+                    'data': tensor_config.data,
+                    'lod': tensor_config.lod
+                }
+
+            results: List[Dict[str, np.ndarray]] = []
+
+            # baseline: cpu no ir_optim run
+            base_config = self.create_inference_config(ir_optim=False)
+            results.append(
+                self.run_test_config(model, params, base_config, feed_data))
+            flag_precision_fp16 = False
+            for paddlelite_config in paddlelite_configs:
+                pred_config = paddlelite_config.value()
+
+                try:
+                    result, opt_model_bytes = self.run_lite_config(
+                        model, params, feed_data, pred_config, args.server_ip)
+                    results.append(result)
+                    self.assert_tensors_near(atol_, rtol_, results[-1],
+                                             results[0], flag_precision_fp16)
+                except Exception as e:
+                    self.fail_log(
+                        self.paddlelite_config_str(pred_config) +
+                        '\033[1;31m \nERROR INFO: {}\033[0m'.format(str(e)))
+                    status = False
+                    break
+                self.success_log('PredictorConfig: ' +
+                                 self.paddlelite_config_str(pred_config))
+            self.assertTrue(status)
 
     def inference_config_str(self, config) -> bool:
         dic = {}
@@ -453,12 +694,15 @@ class AutoScanBaseTest(unittest.TestCase):
                         main_block.op(i).type(), target_, precision_, layout_,
                         current_target_, current_precision_, current_layout_))
 
-    def run_and_statis(self,
-                       quant=False,
-                       max_examples=100,
-                       reproduce=None,
-                       min_success_num=25,
-                       passes=None):
+    def run_and_statis(
+            self,
+            quant=False,
+            max_examples=100,
+            reproduce=None,
+            min_success_num=25,
+            passes=None,
+            model=None,
+            params=None, ):
         self.init_statistical_parameters()
         settings.register_profile(
             "dev",
@@ -483,8 +727,15 @@ class AutoScanBaseTest(unittest.TestCase):
         def program_generator(draw):
             return self.sample_program_configs(draw)
 
+        def inputs_generator(draw):
+            return self.prepare_input_data(draw)
+
         def run_test(prog_config):
             return self.run_test(quant=quant, prog_configs=[prog_config])
+
+        def run_model_test(inputs_configs):
+            return self.run_model_test(
+                inputs_configs=[inputs_configs], model=model, params=params)
 
         # if current unittest is not active on the input targ    paddlelite_not_support_flag = Trueet, we will exit directly.
         gl.set_all_test_ops(self.get_target(),
@@ -494,47 +745,69 @@ class AutoScanBaseTest(unittest.TestCase):
                          self.get_target())
             return
 
+        if not self.is_nnadapter_device_actived():
+            logging.info("Error: This test is not actived on " +
+                         self.get_nnadapter_device_name())
+            return
+
         if self.get_target().upper() == "NNADAPTER":
             self.assertTrue(
                 self.args.nnadapter_device_names != "",
                 "Args Error: Please set nnadapter_device_names when target=nnadapter!"
             )
 
-        generator = st.composite(program_generator)
-        loop_func = given(generator())(run_test)
+        if self.is_model_test():
+            generator = st.composite(inputs_generator)
+            loop_func = given(generator())(run_model_test)
+        else:
+            generator = st.composite(program_generator)
+            loop_func = given(generator())(run_test)
+
         if reproduce is not None:
             loop_func = reproduce(loop_func)
         logging.info("Start to running test of {}".format(type(self)))
         loop_func()
-        logging.info(
-            "===================Statistical Information===================")
-        logging.info("Number of Generated Programs: {}".format(max_examples))
-        logging.info("Number of Predictor Kinds: {}".format(
-            int(self.num_predictor_kinds)))
-        self.assertTrue(self.num_predictor_kinds > 0,
-                        "Number of Predictor Kinds must be greater than 0")
-        logging.info("Number of Ran Programs: {}".format(
-            self.num_ran_programs_list))
-        logging.info("Number of Invalid Programs: {}".format(
-            self.num_invalid_programs_list))
-        logging.info("Number of Ignored Tests: {}".format(
-            self.num_ignore_tests_list))
-        successful_ran_programs = int(
-            (sum(self.num_ran_programs_list) + sum(self.num_ignore_tests_list))
-            / self.num_predictor_kinds)
+        if self.is_model_test():
+            logging.info(
+                "===================Statistical Information===================")
+            logging.info("Number of Input Configs: {}".format(max_examples))
+            logging.info("Number of Predictor Kinds: {}".format(
+                int(self.num_predictor_kinds)))
+        else:
+            logging.info(
+                "===================Statistical Information===================")
+            logging.info("Number of Generated Programs: {}".format(
+                max_examples))
+            logging.info("Number of Predictor Kinds: {}".format(
+                int(self.num_predictor_kinds)))
+            self.assertTrue(self.num_predictor_kinds > 0,
+                            "Number of Predictor Kinds must be greater than 0")
+            logging.info("Number of Ran Programs: {}".format(
+                self.num_ran_programs_list))
+            logging.info("Number of Invalid Programs: {}".format(
+                self.num_invalid_programs_list))
+            logging.info("Number of Ignored Tests: {}".format(
+                self.num_ignore_tests_list))
+            successful_ran_programs = int(
+                (sum(self.num_ran_programs_list) +
+                 sum(self.num_ignore_tests_list)) / self.num_predictor_kinds)
 
-        logging.info(
-            "Number of successfully ran programs approximately equal to {}".
-            format(successful_ran_programs))
-        if successful_ran_programs < min_success_num:
-            logging.fatal(
-                "At least {} programs need to ran successfully, but now only about {} programs satisfied.".
-                format(min_success_num, successful_ran_programs))
-            assert False
+            logging.info(
+                "Number of successfully ran programs approximately equal to {}".
+                format(successful_ran_programs))
+            if successful_ran_programs < min_success_num:
+                logging.fatal(
+                    "At least {} programs need to ran successfully, but now only about {} programs satisfied.".
+                    format(min_success_num, successful_ran_programs))
+                assert False
 
     @abc.abstractmethod
-    def run_lite_config(self, model, params, feed_data,
-                        pred_config) -> Dict[str, np.ndarray]:
+    def run_lite_config(self,
+                        model,
+                        params,
+                        feed_data,
+                        pred_config,
+                        server_ip="localhost") -> Dict[str, np.ndarray]:
         raise NotImplementedError
 
     # enable a predictor config
@@ -577,6 +850,9 @@ class AutoScanBaseTest(unittest.TestCase):
             else:
                 self.valid_places.append([Place(tar_, pre_, lay_)])
 
+    def enable_devices_on_nnadapter(self, device_names=list) -> None:
+        self.vaild_nnadapter_device_names = device_names
+
     def get_target(self) -> str:
         return self.args.target
 
@@ -584,6 +860,14 @@ class AutoScanBaseTest(unittest.TestCase):
         for valid_place_ in self.valid_places:
             if self.get_target() in valid_place_[0]:
                 return True
+        return False
+
+    def is_nnadapter_device_actived(self) -> bool:
+        if self.get_target().upper() != "NNADAPTER":
+            return True
+        if self.get_nnadapter_device_name(
+        ) in self.vaild_nnadapter_device_names:
+            return True
         return False
 
     def get_nnadapter_device_name(self) -> str:

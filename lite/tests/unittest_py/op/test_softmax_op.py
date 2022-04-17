@@ -60,18 +60,27 @@ class TestSoftmaxOp(AutoScanTest):
         ]
         self.enable_testing_on_place(places=metal_places)
         self.enable_testing_on_place(TargetType.NNAdapter, PrecisionType.FP32)
+        self.enable_testing_on_place(
+            TargetType.ARM,
+            PrecisionType.FP16,
+            DataLayoutType.NCHW,
+            thread=[1, 4])
+        self.enable_devices_on_nnadapter(device_names=[
+            "kunlunxin_xtcl", "cambricon_mlu", "nvidia_tensorrt"
+        ])
 
     def is_program_valid(self,
                          program_config: ProgramConfig,
                          predictor_config: CxxConfig) -> bool:
         x_shape = list(program_config.inputs["input_data"].shape)
         axis = program_config.ops[0].attrs["axis"]
-        if predictor_config.target() == TargetType.OpenCL:
-            if len(x_shape) < 2 or (len(x_shape) == 4 and axis == 0):
-                return False
         if predictor_config.target() == TargetType.Metal:
             if len(x_shape) != 4 or axis != 1 or x_shape[0] != 1:
                 return False
+        if predictor_config.target() == TargetType.NNAdapter:
+            if "nvidia_tensorrt" in self.get_nnadapter_device_name():
+                if len(x_shape) < 2:
+                    return False
         return True
 
     def sample_program_configs(self, draw):
@@ -81,7 +90,7 @@ class TestSoftmaxOp(AutoScanTest):
                     min_value=1, max_value=64), min_size=0, max_size=3))
         in_shape.insert(0, draw(st.integers(min_value=1, max_value=4)))
         input_axis = draw(st.sampled_from([0, 1, 2, 3, -1]))
-        assume(input_axis < len(in_shape))
+        assume(len(in_shape) > 1 and input_axis < len(in_shape))
 
         def generate_input(*args, **kwargs):
             return np.random.normal(0.0, 1.0, in_shape).astype(np.float32)
@@ -107,6 +116,8 @@ class TestSoftmaxOp(AutoScanTest):
         target_str = self.get_target()
         if target_str == "Metal":
             atol, rtol = 1e-3, 1e-3
+        elif target_str == "OpenCL":
+            atol, rtol = 1e-4, 1e-4
         elif target_str == "NNAdapter":
             atol, rtol = 4e-5, 4e-5
         return self.get_predictor_configs(), ["softmax"], (atol, rtol)
@@ -124,6 +135,13 @@ class TestSoftmaxOp(AutoScanTest):
                 if x_shape[1] % 4 != 0:
                     return True
 
+        def teller3(program_config, predictor_config):
+            if self.get_nnadapter_device_name() == "nvidia_tensorrt":
+                in_shape = program_config.inputs["input_data"].shape
+                axis = program_config.ops[0].attrs["axis"]
+                if len(in_shape) == 1 or axis == 0 or axis == -len(in_shape):
+                    return True
+
         self.add_ignore_check_case(
             teller1, IgnoreReasons.ACCURACY_ERROR,
             "The op output has diff in a specific case. We need to fix it as soon as possible."
@@ -131,6 +149,10 @@ class TestSoftmaxOp(AutoScanTest):
         self.add_ignore_check_case(
             teller2, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
             "Lite does not support this op in a specific case on metal. We need to fix it as soon as possible."
+        )
+        self.add_ignore_check_case(
+            teller3, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
+            "Lite does not support 'in_shape_size == 1' or 'axis == 0' on nvidia_tensorrt."
         )
 
     def test(self, *args, **kwargs):
@@ -142,6 +164,9 @@ class TestSoftmaxOp(AutoScanTest):
         elif target_str == "Metal":
             # Make sure to generate enough valid cases for Metal
             max_examples = 2000
+        elif target_str == "NNAdapter":
+            # Make sure to generate enough valid cases for NNAdapter
+            max_examples = 200
         self.run_and_statis(quant=False, max_examples=max_examples)
 
 

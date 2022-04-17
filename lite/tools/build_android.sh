@@ -51,6 +51,11 @@ NNADAPTER_WITH_VERISILICON_TIMVX=OFF
 NNADAPTER_VERISILICON_TIMVX_SRC_GIT_TAG="main"
 NNADAPTER_VERISILICON_TIMVX_VIV_SDK_ROOT=""
 NNADAPTER_VERISILICON_TIMVX_VIV_SDK_URL="http://paddlelite-demo.bj.bcebos.com/devices/verisilicon/sdk/viv_sdk_android_9_armeabi_v7a_6_4_4_3_generic.tgz"
+NNADAPTER_WITH_ANDROID_NNAPI=OFF
+NNADAPTER_WITH_FAKE_DEVICE=OFF
+NNADAPTER_FAKE_DEVICE_SDK_ROOT=""
+NNADAPTER_WITH_GOOGLE_XNNPACK=OFF
+NNADAPTER_GOOGLE_XNNPACK_SRC_GIT_TAG="master"
 # options of compiling OPENCL lib.
 WITH_OPENCL=OFF
 # options of adding training ops
@@ -195,9 +200,6 @@ function make_tiny_publish_so {
 
   # Step1. Create directory for compiling.
   build_dir=$workspace/build.lite.android.$ARCH.$TOOLCHAIN
-  if [ "${WITH_OPENCL}" == "ON" ]; then
-      build_dir=${build_dir}.opencl
-  fi
   if [ "${WITH_npu}" == "ON" ]; then
       build_dir=${build_dir}.npu
   fi
@@ -255,6 +257,11 @@ function make_tiny_publish_so {
       -DNNADAPTER_VERISILICON_TIMVX_SRC_GIT_TAG=$NNADAPTER_VERISILICON_TIMVX_SRC_GIT_TAG \
       -DNNADAPTER_VERISILICON_TIMVX_VIV_SDK_ROOT=$NNADAPTER_VERISILICON_TIMVX_VIV_SDK_ROOT \
       -DNNADAPTER_VERISILICON_TIMVX_VIV_SDK_URL=$NNADAPTER_VERISILICON_TIMVX_VIV_SDK_URL \
+      -DNNADAPTER_WITH_ANDROID_NNAPI=$NNADAPTER_WITH_ANDROID_NNAPI \
+      -DNNADAPTER_WITH_FAKE_DEVICE=$NNADAPTER_WITH_FAKE_DEVICE \
+      -DNNADAPTER_FAKE_DEVICE_SDK_ROOT=$NNADAPTER_FAKE_DEVICE_SDK_ROOT \
+      -DNNADAPTER_WITH_GOOGLE_XNNPACK=$NNADAPTER_WITH_GOOGLE_XNNPACK \
+      -DNNADAPTER_GOOGLE_XNNPACK_SRC_GIT_TAG=$NNADAPTER_GOOGLE_XNNPACK_SRC_GIT_TAG \
       -DLITE_WITH_OPENCL=$WITH_OPENCL \
       -DARM_TARGET_ARCH_ABI=$ARCH \
       -DARM_TARGET_LANG=$TOOLCHAIN \
@@ -340,6 +347,11 @@ function make_full_publish_so {
       -DNNADAPTER_VERISILICON_TIMVX_SRC_GIT_TAG=$NNADAPTER_VERISILICON_TIMVX_SRC_GIT_TAG \
       -DNNADAPTER_VERISILICON_TIMVX_VIV_SDK_ROOT=$NNADAPTER_VERISILICON_TIMVX_VIV_SDK_ROOT \
       -DNNADAPTER_VERISILICON_TIMVX_VIV_SDK_URL=$NNADAPTER_VERISILICON_TIMVX_VIV_SDK_URL \
+      -DNNADAPTER_WITH_ANDROID_NNAPI=$NNADAPTER_WITH_ANDROID_NNAPI \
+      -DNNADAPTER_WITH_FAKE_DEVICE=$NNADAPTER_WITH_FAKE_DEVICE \
+      -DNNADAPTER_FAKE_DEVICE_SDK_ROOT=$NNADAPTER_FAKE_DEVICE_SDK_ROOT \
+      -DNNADAPTER_WITH_GOOGLE_XNNPACK=$NNADAPTER_WITH_GOOGLE_XNNPACK \
+      -DNNADAPTER_GOOGLE_XNNPACK_SRC_GIT_TAG=$NNADAPTER_GOOGLE_XNNPACK_SRC_GIT_TAG \
       -DLITE_WITH_OPENCL=$WITH_OPENCL \
       -DARM_TARGET_ARCH_ABI=$ARCH \
       -DARM_TARGET_LANG=$TOOLCHAIN \
@@ -573,6 +585,26 @@ function main {
                 ;;
             --nnadapter_verisilicon_timvx_viv_sdk_url=*)
                 NNADAPTER_VERISILICON_TIMVX_VIV_SDK_URL="${i#*=}"
+                shift
+                ;;
+            --nnadapter_with_android_nnapi=*)
+                NNADAPTER_WITH_ANDROID_NNAPI="${i#*=}"
+                shift
+                ;;
+            --nnadapter_with_fake_device=*)
+                NNADAPTER_WITH_FAKE_DEVICE="${i#*=}"
+                shift
+                ;;
+            --nnadapter_fake_device_sdk_root=*)
+                NNADAPTER_FAKE_DEVICE_SDK_ROOT="${i#*=}"
+                shift
+                ;;
+            --nnadapter_with_google_xnnpack=*)
+                NNADAPTER_WITH_GOOGLE_XNNPACK="${i#*=}"
+                shift
+                ;;
+            --nnadapter_google_xnnpack_src_git_tag=*)
+                NNADAPTER_GOOGLE_XNNPACK_SRC_GIT_TAG="${i#*=}"
                 shift
                 ;;
             # compiling result contains both light_api and cxx_api lib.

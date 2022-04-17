@@ -113,7 +113,8 @@ void Optimizer::ApplyPasses(
                 << " because the target or kernel does not match.";
     } else {
       // Check the pass whether it is supported for processing subblocks
-      if (kSubblockUnsupportedPasses.count(pass->name())) {
+      if (kSubblockUnsupportedPasses.count(pass->name()) ||
+          kSubblockSkippedPasses.count(pass->name())) {
         pass->Apply((*graphes)[kRootBlockIdx]);
       } else {
         for (auto& graph : *graphes) {
@@ -134,13 +135,19 @@ std::unique_ptr<RuntimeProgram> RunDefaultOptimizer(
   Optimizer optim(valid_places, kernel_pick_factor);
 
   std::vector<std::string> passes_local{
-      {"lite_quant_dequant_fuse_pass",              //
-       "weight_quantization_preprocess_pass",       //
-       "op_transformation_pass",                    //
-       "remove_scale1_pass",                        //
-       "adaptive_1x1_pool2d_convert_global_pass",   //
-       "lite_unsqueeze2_pad3d_squeeze2_fuse_pass",  //
-
+      {"lite_quant_dequant_fuse_pass",         //
+       "weight_quantization_preprocess_pass",  //
+       "op_transformation_pass",               //
+       "remove_scale1_pass",                   //
+       "assign_value_calc_offline_pass",
+       "p_norm_fill_constant_max_div_fuse_pass",
+       "fill_constant_calc_offline_pass",
+       "range_calc_offline_pass",
+       "scale_calc_offline_pass",
+       "unsqueeze_calc_offline_pass",
+       "ssd_boxes_calc_offline_pass",
+       "adaptive_1x1_pool2d_convert_global_pass",  //
+       "lite_unsqueeze2_pad3d_squeeze2_fuse_pass",
        "lite_conv_elementwise_fuse_pass",  // conv-elemwise-bn
        "lite_conv_bn_fuse_pass",           //
        "lite_conv_elementwise_fuse_pass",  // conv-bn-elemwise
@@ -174,10 +181,6 @@ std::unique_ptr<RuntimeProgram> RunDefaultOptimizer(
        "lite_conv_elementwise_tree_fuse_pass",
        "lite_greater_than_cast_fuse_pass",
        "fill_range_fuse_pass",
-       "range_calc_offline_pass",
-       "p_norm_fill_constant_max_div_fuse_pass",
-       "fill_constant_calc_offline_pass",
-       "unsqueeze_calc_offline_pass",
        "identity_dropout_eliminate_pass",
        "sparse_conv_detect_pass",
        "keepdims_convert_pass",
@@ -204,8 +207,6 @@ std::unique_ptr<RuntimeProgram> RunDefaultOptimizer(
        "fix_mismatched_precision_pass",
        "__xpu__dynamic_lstm_fuse_pass",
        "__xpu__multi_softmax_fuse_pass",
-       "ssd_boxes_calc_offline_pass",
-       "assign_value_calc_offline_pass",
        // Only for fully quantized model, infer the output scale and fix the
        // attribute 'enable_int8' for all of the quantized ops.
        "quantization_parameters_propagation_pass",
@@ -319,7 +320,7 @@ std::unique_ptr<RuntimeProgram> RunDefaultOptimizer(
       auto iter =
           std::find(passes_local.begin(), passes_local.end(), pqd_depend_pass);
       CHECK(iter != passes_local.end()) << "No find " << pqd_depend_pass;
-      passes_local.insert(iter + 1, pqd_pass);
+      passes_local.push_back(pass);
     } else {
       passes_local.push_back(pass);
     }
@@ -333,7 +334,6 @@ std::unique_ptr<RuntimeProgram> RunDefaultOptimizer(
       }
     }
   }
-
   for (auto& pass_name : passes_local) {
     optim.AddPass(pass_name);
   }

@@ -26,7 +26,9 @@ statics_data = {
         "OpenCL": set(),
         "Metal": set(),
         "NNAdapter": {
-            "kunlunxin_xtcl": set()
+            "kunlunxin_xtcl": set(),
+            "cambricon_mlu": set(),
+            "nvidia_tensorrt": set()
         }
     },
     "success_ops": {
@@ -36,7 +38,9 @@ statics_data = {
         "OpenCL": set(),
         "Metal": set(),
         "NNAdapter": {
-            "kunlunxin_xtcl": set()
+            "kunlunxin_xtcl": set(),
+            "cambricon_mlu": set(),
+            "nvidia_tensorrt": set()
         }
     },
     "out_diff_ops": {
@@ -46,7 +50,9 @@ statics_data = {
         "OpenCL": set(),
         "Metal": set(),
         "NNAdapter": {
-            "kunlunxin_xtcl": set()
+            "kunlunxin_xtcl": set(),
+            "cambricon_mlu": set(),
+            "nvidia_tensorrt": set()
         }
     },
     "lite_not_supported_ops": {
@@ -56,7 +62,9 @@ statics_data = {
         "OpenCL": set(),
         "Metal": set(),
         "NNAdapter": {
-            "kunlunxin_xtcl": set()
+            "kunlunxin_xtcl": set(),
+            "cambricon_mlu": set(),
+            "nvidia_tensorrt": set()
         }
     },
     "paddle_not_supported_ops": {
@@ -66,7 +74,9 @@ statics_data = {
         "OpenCL": set(),
         "Metal": set(),
         "NNAdapter": {
-            "kunlunxin_xtcl": set()
+            "kunlunxin_xtcl": set(),
+            "cambricon_mlu": set(),
+            "nvidia_tensorrt": set()
         }
     },
 }

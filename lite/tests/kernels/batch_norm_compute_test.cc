@@ -168,6 +168,10 @@ TEST(BatchNorm, precision) {
   return;
 #elif defined(NNADAPTER_WITH_VERISILICON_TIMVX)
   abs_error = 1e-2;
+#elif defined(NNADAPTER_WITH_HUAWEI_KIRIN_NPU)
+  abs_error = 1e-1;
+#elif defined(NNADAPTER_WITH_NVIDIA_TENSORRT)
+  abs_error = 1e-5;
 #else
   return;
 #endif

@@ -80,6 +80,8 @@ class ConvOpLite : public OpLite {
     CHECK(param_.x);
     CHECK(param_.filter);
     CHECK(param_.output);
+    input_tensor_ptrs_cache_.push_back(param_.x);
+    output_tensor_ptrs_cache_.push_back(param_.output);
 
     param_.strides = op_desc.GetAttr<std::vector<int>>("strides");
     std::vector<int> paddings = op_desc.GetAttr<std::vector<int>>("paddings");
@@ -119,6 +121,21 @@ class ConvOpLite : public OpLite {
       if (act_type == "relu") {
         param_.activation_param.active_type = lite_api::ActivationType::kRelu;
         param_.fuse_relu = true;
+      } else if (act_type == "sigmoid") {
+        param_.activation_param.active_type =
+            lite_api::ActivationType::kSigmoid;
+        param_.fuse_sigmoid = true;
+      } else if (act_type == "tanh") {
+        param_.activation_param.active_type = lite_api::ActivationType::kTanh;
+        param_.fuse_tanh = true;
+      } else if (act_type == "swish") {
+        param_.activation_param.swish_scale =
+            op_desc.GetAttr<float>("swish_scale");
+        param_.activation_param.active_type = lite_api::ActivationType::kSwish;
+        param_.fuse_swish = true;
+      } else if (act_type == "abs") {
+        param_.activation_param.active_type = lite_api::ActivationType::kAbs;
+        param_.fuse_abs = true;
       } else if (act_type == "relu6") {
         param_.activation_param.active_type = lite_api::ActivationType::kRelu6;
         param_.activation_param.Relu_clipped_coef =

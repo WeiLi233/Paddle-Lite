@@ -105,6 +105,8 @@ struct FcParam : ParamBase {
   bool padding_weights{false};
   std::string Prelu_mode{
       "channel"};  // prelu param, can be "all", "channel" or "element"
+  std::string op_type{"mul"};
+  float alpha{6.f};
   // for int8
   WITH_INT8_CONFIG
 };
@@ -131,6 +133,7 @@ struct InterpolateParam : ParamBase {
   int out_w{-1};
   bool align_corners{true};
   int align_mode{1};
+  bool version_2{false};
   std::string interp_method{"Nearest"};
   DataLayoutType data_layout{DATALAYOUT(kNCHW)};
 };
@@ -305,6 +308,8 @@ struct ActivationParam : ParamBase {
   float hard_swish_threshold{6.0f};
   float hard_swish_scale{6.0f};
   float hard_swish_offset{3.0f};
+  // swish param
+  float swish_scale{6.0f};
   // thresholded_relu
   float relu_threshold{1.0f};
   // elu
@@ -381,6 +386,11 @@ struct ConvParam : ParamBase {
   bool fuse_relu_before_depthwise_conv{false};
   bool use_mkldnn{false};
   bool fuse_relu{false};  // only used in mkldnn kernel
+  bool fuse_sigmoid{false};
+  bool fuse_tanh{false};
+  bool fuse_swish{false};
+  bool fuse_exp{false};
+  bool fuse_abs{false};
   bool use_quantizer{
       false};  // set true for op that should be quantized, only used for cpu
   bool fuse_residual_connection{false};
@@ -651,6 +661,15 @@ struct FakeChannelWiseQuantDequantAbsMaxParam : ParamBase {
   const lite::Tensor* x{};
   lite::Tensor* out{};
   lite::Tensor* out_scale{};
+  int quant_axis;
+  int bit_length;
+};
+
+struct QuantizeLinearParam : ParamBase {
+  const lite::Tensor* x{};
+  const lite::Tensor* scale{};
+  const lite::Tensor* zero_point{};
+  lite::Tensor* y{};
   int quant_axis;
   int bit_length;
 };
@@ -1063,7 +1082,8 @@ struct SequencePoolParam : ParamBase {
 
 struct SequenceConvParam : ParamBase {
   const lite::Tensor* X{};
-  const lite::Tensor* Filter{};
+  // not const for python unit_test
+  lite::Tensor* Filter{};
   lite::Tensor* Out{};
   int contextStart{0};
   int contextStride{1};
@@ -1305,6 +1325,7 @@ struct GenerateProposalsV2Param : ParamBase {
   float nms_thresh{0.5f};
   float min_size{0.1f};
   float eta{1.0f};
+  bool pixel_offset{true};
 
   // outputs
   lite::Tensor* RpnRois{};
@@ -1379,6 +1400,7 @@ struct GatherParam : ParamBase {
   const lite::Tensor* Index{};
   const lite::Tensor* Axis{nullptr};
   lite::Tensor* Out{};
+  int axis{-1};
 };
 
 struct GatherTreeParam : ParamBase {
@@ -1400,15 +1422,16 @@ struct AssignParam : ParamBase {
 
 /// ----------------------- roi_align operators -----------------------
 struct RoiAlignParam : ParamBase {
-  lite::Tensor* X{};
-  lite::Tensor* ROIs{};
-  lite::Tensor* RoisLod{};
-  lite::Tensor* RoisNum{};
-  lite::Tensor* Out{};
+  lite::Tensor* X{nullptr};
+  lite::Tensor* ROIs{nullptr};
+  lite::Tensor* RoisLod{nullptr};
+  lite::Tensor* RoisNum{nullptr};
+  lite::Tensor* Out{nullptr};
   float spatial_scale{1.0f};
   int pooled_height{1};
   int pooled_width{1};
   int sampling_ratio{-1};
+  bool align{false};
 };
 
 /// ----------------------- box_clip operators -----------------------

@@ -65,6 +65,14 @@ class TestTransposeOp(AutoScanTest):
             Place(TargetType.Host, PrecisionType.FP32)
         ]
         self.enable_testing_on_place(places=metal_places)
+        self.enable_testing_on_place(
+            TargetType.ARM,
+            PrecisionType.FP16,
+            DataLayoutType.NCHW,
+            thread=[1, 4])
+        self.enable_testing_on_place(TargetType.NNAdapter, PrecisionType.FP32)
+        self.enable_devices_on_nnadapter(
+            device_names=["kunlunxin_xtcl", "nvidia_tensorrt"])
 
     def is_program_valid(self,
                          program_config: ProgramConfig,
@@ -85,18 +93,24 @@ class TestTransposeOp(AutoScanTest):
         if (target == "X86"):
             use_mkldnn_data = True
 
-        def generate_X_data():
-            return np.random.normal(0.0, 5.0, in_shape).astype(in_dtype)
-
         axis_int32_data = draw(
             st.lists(
                 st.integers(
-                    min_value=0, max_value=3), min_size=4, max_size=4))
+                    min_value=0, max_value=3), min_size=3, max_size=4))
+        if (len(axis_int32_data) == 3):
+            assume(
+                sorted(axis_int32_data) == [0, 1, 2] and
+                axis_int32_data != [0, 1, 2])
+            in_shape = draw(st.sampled_from([[C, H, W]]))
+        elif (len(axis_int32_data) == 4):
+            assume(
+                sorted(axis_int32_data) == [0, 1, 2, 3] and
+                axis_int32_data != [0, 1, 2, 3])
 
-        assume(
-            sorted(axis_int32_data) == [0, 1, 2, 3] and
-            axis_int32_data != [0, 1, 2, 3])
-        if (target == "Metal"):
+        def generate_X_data():
+            return np.random.normal(0.0, 5.0, in_shape).astype(in_dtype)
+
+        if (target == "Metal" and len(axis_int32_data) == 4):
             for i in range(4):
                 for j in range(4):
                     if i != j:
@@ -133,7 +147,6 @@ class TestTransposeOp(AutoScanTest):
     def add_ignore_pass_case(self):
         def _teller1(program_config, predictor_config):
             x_shape = list(program_config.inputs["X_data"].shape)
-            axis = program_config.ops[0].attrs["axis"]
             if predictor_config.target() == TargetType.Metal:
                 if x_shape[0] != 1:
                     return True
@@ -144,14 +157,16 @@ class TestTransposeOp(AutoScanTest):
         )
 
         def _teller2(program_config, predictor_config):
-            axis = program_config.ops[0].attrs["axis"]
-            if predictor_config.target() == TargetType.OpenCL:
-                if sorted(axis) == [0, 1, 2, 3] and axis[0] != 0:
+            if "nvidia_tensorrt" in self.get_nnadapter_device_name():
+                in_shape = program_config.inputs["X_data"].shape
+                axis = program_config.ops[0].attrs["axis"]
+                if len(in_shape) == 1 or axis[0] != 0:
                     return True
 
         self.add_ignore_check_case(
             _teller2, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
-            "Unsupported axis permutation for current lite OpenCL.")
+            "Lite does not support 'in_shape_size == 1' or 'axis[0] != 0' on nvidia_tensorrt."
+        )
 
     def test(self, *args, **kwargs):
         self.run_and_statis(quant=False, max_examples=25)
