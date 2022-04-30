@@ -475,6 +475,25 @@ public:
       xdnn::Activation_t::LINEAR); /* act_type */
       CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
       
+      // if(step == 1) {
+      //     vector<T> q_buf_cpu(max_batch_size_ * hidden_units_ * 3);
+      //     vector<T> tensor_cpu(max_batch_size_ * hidden_units_);
+      //     xpu_memcpy(
+      //         q_buf_cpu.data(),
+      //         query_buf_,
+      //         max_batch_size_ * hidden_units_ * 3 * sizeof(T),
+      //         XPU_DEVICE_TO_HOST);
+      //     xpu_memcpy(
+      //         tensor_cpu.data(),
+      //         from_tensor,
+      //         max_batch_size_ * hidden_units_ * sizeof(T),
+      //         XPU_DEVICE_TO_HOST);
+      //     cout << "STEP = " << step << endl;
+      //     for(size_t i=0; i<tensor_cpu.size(); i+=1000) {
+      //       cout << i << '\t' << tensor_cpu[i] << '\t' << q_buf_cpu[i] << endl;
+      //     }
+      // }
+
       xdnn_ret = xdnn::slice<T>(ctx_,
                                 query_buf_,
                                 sliced_q_,
@@ -655,6 +674,20 @@ public:
       param_->self_attention.attention_output_weight.bias, /* bias */
       xdnn::Activation_t::LINEAR); /* act_type */
       CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error2!.";
+
+      // if(step == 1) {
+      //     vector<T> dout_cpu(max_batch_size_ * hidden_units_);
+      //     xpu_memcpy(
+      //         dout_cpu.data(),
+      //         decoder_output,
+      //         max_batch_size_ * hidden_units_ * sizeof(T),
+      //         XPU_DEVICE_TO_HOST);
+      //     cout << "STEP = " << step << endl;
+      //     for(size_t i=0; i<dout_cpu.size(); i+=1000) {
+      //       cout << i << '\t' << dout_cpu[i] << endl;
+      //     }
+      // }
+
   } // end masked_multi_head_attention
 
   void cross_multi_head_attention(const T *from_tensor,
@@ -804,32 +837,28 @@ public:
           qkv_attn_param);
     CHECK_EQ(xdnn_ret, 0) << "cross attention qk_v_attention error.";
     
-    if(step == 2) {
-      /*
-      vector<float> tmp_v_out(m*n);
-      TargetWrapperXPU::MemcpySync(
-                        tmp_v_out.data(),
-                        query_buf_, 
-                        m*n*sizeof(float), 
-                        IoDirection::DtoH);
-      cout << "STEP QUERY = " << step << endl;
-      for(int i=0; i<m*n; i+=200) {
-        cout << i << '\t' << tmp_v_out[i] << endl;
-      }
-      */
-      /*
-      vector<float> tmp_v_out(m*n);
-      TargetWrapperXPU::MemcpySync(
-                        tmp_v_out.data(),
-                        context_buf_, 
-                        m*n*sizeof(float), 
-                        IoDirection::DtoH);
-      cout << "STEP CROSS = " << step << endl;
-      for(int i=0; i<m*n; i+=200) {
-        cout << i << '\t' << tmp_v_out[i] << endl;
-      }
-      */
-    }
+    // if(step == 2) {
+    //   vector<float> tmp_v_out(m*n);
+    //   TargetWrapperXPU::MemcpySync(
+    //                     tmp_v_out.data(),
+    //                     query_buf_, 
+    //                     m*n*sizeof(float), 
+    //                     IoDirection::DtoH);
+    //   cout << "STEP QUERY = " << step << endl;
+    //   for(int i=0; i<m*n; i+=200) {
+    //     cout << i << '\t' << tmp_v_out[i] << endl;
+    //   }
+    //   vector<float> tmp_v_out(m*n);
+    //   TargetWrapperXPU::MemcpySync(
+    //                     tmp_v_out.data(),
+    //                     context_buf_, 
+    //                     m*n*sizeof(float), 
+    //                     IoDirection::DtoH);
+    //   cout << "STEP CROSS = " << step << endl;
+    //   for(int i=0; i<m*n; i+=200) {
+    //     cout << i << '\t' << tmp_v_out[i] << endl;
+    //   }
+    // }
 
     xdnn_ret = xdnn::fc_fusion<T, T, T, TGEMM>(
         ctx_, /* context */
@@ -852,6 +881,18 @@ public:
         param_->cross_attention.attention_output_weight.bias, /* bias */
         xdnn::Activation_t::LINEAR); /* act_type */
     CHECK_EQ(xdnn_ret, 0) << "calling fc_fusion error!.";
+      // if(step == 1) {
+      //     vector<T> dout_cpu(max_batch_size_ * hidden_units_);
+      //     xpu_memcpy(
+      //         dout_cpu.data(),
+      //         decoder_output,
+      //         max_batch_size_ * hidden_units_ * sizeof(T),
+      //         XPU_DEVICE_TO_HOST);
+      //     cout << "STEP cross out = " << step << endl;
+      //     for(size_t i=0; i<dout_cpu.size(); i+=1000) {
+      //       cout << i << '\t' << dout_cpu[i] << endl;
+      //     }
+      // }
   } // end cross_multi_head_attention()
 };
 
@@ -1296,18 +1337,18 @@ public:
       } // end layer loop
       
       
-      if(step == 2 || step == 1) {
-          vector<float> attention_out(args_.batch_size_ * args_.beam_width_ * args_.hidden_units_);
-          TargetWrapperXPU::MemcpySync(
-              attention_out.data(), 
-              from_tensor_[0], 
-              args_.batch_size_ * args_.beam_width_ * args_.hidden_units_ * sizeof(float), 
-              IoDirection::DtoH); 
-          cout << "STEP = " << step << endl;
-          for(size_t i=0; i<attention_out.size(); i+=200) {
-            cout << i << '\t' << attention_out[i] << endl;
-          }
-      }
+      // if(step == 2 || step == 1) {
+      //     vector<float> attention_out(args_.batch_size_ * args_.beam_width_ * args_.hidden_units_);
+      //     TargetWrapperXPU::MemcpySync(
+      //         attention_out.data(), 
+      //         from_tensor_[0], 
+      //         args_.batch_size_ * args_.beam_width_ * args_.hidden_units_ * sizeof(float), 
+      //         IoDirection::DtoH); 
+      //     cout << "STEP = " << step << endl;
+      //     for(size_t i=0; i<attention_out.size(); i+=200) {
+      //       cout << i << '\t' << attention_out[i] << endl;
+      //     }
+      // }
       
       
       if(step > min_trg_len) {
