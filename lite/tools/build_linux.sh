@@ -103,6 +103,7 @@ readonly THIRDPARTY_TAR=third-party-91a9ab3.tar.gz
 # absolute path of Paddle-Lite.
 readonly workspace=$PWD/$(dirname $0)/../../
 # basic options for linux compiling.
+#RelWithDebInfo
 readonly CMAKE_COMMON_OPTIONS="-DWITH_LITE=ON \
                             -DCMAKE_BUILD_TYPE=Release \
                             -DWITH_MKLDNN=OFF \
@@ -713,6 +714,7 @@ function main {
                 ;;
             # unknown option
             *)
+	    	echo "ERROR: ${i}"
                 echo "Error: unsupported argument \"${i#*=}\""
                 print_usage
                 exit 1

@@ -269,6 +269,9 @@ struct LogSoftmaxParam : ParamBase {
 
 // For Reshape and Reshape2 Op
 struct ReshapeParam : ParamBase {
+  std::string my_debug_X_;
+  std::string my_debug_Out_;
+  std::vector<std::string> my_debug_ShapeTensor_;
   const lite::Tensor* x{};
   std::vector<const lite::Tensor*> shape_tensor_vct{};
   const lite::Tensor* shape_tensor{};
@@ -285,6 +288,8 @@ struct ReshapeParam : ParamBase {
 
 // For Concat op
 struct ConcatParam : ParamBase {
+  std::vector<std::string> my_debug_x_vec_;
+  std::string my_debug_output_;
   std::vector<lite::Tensor*> x{};
   lite::Tensor* output{};
   int axis{0};
@@ -596,6 +601,7 @@ struct FillAnyLikeParam : ParamBase {
 
 /// ----------------------- fill_constant operators ----------------------
 struct FillConstantParam : ParamBase {
+  std::string my_debug_ShapeTensor_;
   int dtype{static_cast<int>(VarDescAPI::VarDataType::FP32)};
   std::vector<int64_t> shape{};
   lite::Tensor* shape_tensor{nullptr};
@@ -959,6 +965,7 @@ struct BeamSearchDecodeParam : ParamBase {
 
 /// ----------------------- LookupTable operators ----------------------f
 struct LookupTableParam : ParamBase {
+  std::string my_debug_Out_;
   const lite::Tensor* W{nullptr};
   const lite::Tensor* Ids{nullptr};
   lite::Tensor* Out{nullptr};
@@ -1738,6 +1745,60 @@ struct XPUMultiEncoderParam : ParamBase {
   bool adaptive_seqlen{false};
 };
 
+struct FusionDecodingParam : ParamBase {
+  lite::Tensor* input_{};
+  lite::Tensor* mem_seq_len_{};
+  std::vector<const lite::Tensor*> cross_key_bias_;
+  std::vector<const lite::Tensor*> cross_key_weight_;
+  std::vector<const lite::Tensor*> cross_layernorm_bias_;
+  std::vector<const lite::Tensor*> cross_layernorm_weight_;
+  std::vector<const lite::Tensor*> cross_out_bias_;
+  std::vector<const lite::Tensor*> cross_out_weight_;
+  std::vector<const lite::Tensor*> cross_query_bias_;
+  std::vector<const lite::Tensor*> cross_query_weight_;
+  std::vector<const lite::Tensor*> cross_value_bias_;
+  std::vector<const lite::Tensor*> cross_value_weight_;
+  const lite::Tensor* decoder_layernorm_bias_{};
+  const lite::Tensor* decoder_layernorm_weight_{};
+  const lite::Tensor* emb_bias_{};
+  const lite::Tensor* emb_weight_{};
+  std::vector<const lite::Tensor*> ffn_inter_bias_;
+  std::vector<const lite::Tensor*> ffn_inter_weight_;
+  std::vector<const lite::Tensor*> ffn_layernorm_bias_;
+  std::vector<const lite::Tensor*> ffn_layernorm_weight_;
+  std::vector<const lite::Tensor*> ffn_out_bias_;
+  std::vector<const lite::Tensor*> ffn_out_weight_;
+  const lite::Tensor* position_enc_emb_{};
+  std::vector<const lite::Tensor*> self_key_bias_;
+  std::vector<const lite::Tensor*> self_key_weight_;
+  std::vector<const lite::Tensor*> self_layernorm_bias_;
+  std::vector<const lite::Tensor*> self_layernorm_weight_;
+  std::vector<const lite::Tensor*> self_out_bias_;
+  std::vector<const lite::Tensor*> self_out_weight_;
+  std::vector<const lite::Tensor*> self_query_bias_;
+  std::vector<const lite::Tensor*> self_query_weight_;
+  std::vector<const lite::Tensor*> self_value_bias_;
+  std::vector<const lite::Tensor*> self_value_weight_;
+  const lite::Tensor* word_embedding_{};
+  lite::Tensor* output_ids_{};
+  lite::Tensor* parent_ids_{};
+  lite::Tensor* sequence_length_{};
+
+  std::string decoding_strategy_;
+  int32_t beam_size_{};
+  int32_t topk_{};
+  float topp_{};
+  int32_t n_head_{};
+  int32_t size_per_head_{};
+  int32_t num_layer_{};
+  int32_t bos_id_{};
+  int32_t eos_id_{};
+  int64_t max_len_{};
+  float beam_search_diversity_rate_{};
+  float alpha_{};
+  bool rel_len_{};
+};
+
 struct XPUEmbeddingWithEltwiseAddParam : ParamBase {
   std::vector<lite::Tensor*> Ids;
   std::vector<lite::Tensor*> Tables;
@@ -2114,6 +2175,8 @@ struct StridedSliceParam : ParamBase {
 };
 
 struct TileParam : ParamBase {
+  std::string my_debug_X_;
+  std::string my_debug_Out_;
   lite::Tensor* X{};
   lite::Tensor* Out{};
   std::vector<int> repeat_times{};

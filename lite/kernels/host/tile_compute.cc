@@ -23,7 +23,8 @@ namespace host {
 template <typename T, PrecisionType PType>
 void TileCompute<T, PType>::Run() {
   auto& param = this->template Param<operators::TileParam>();
-  auto repeat_times = param.repeat_times;
+  //auto repeat_times = param.repeat_times;
+  std::vector<int> repeat_times;
   if (param.RepeatTimes) {
     auto repeat_times_size = param.RepeatTimes->data_size();
     for (int64_t i = 0; i < repeat_times_size; i++) {
@@ -35,6 +36,19 @@ void TileCompute<T, PType>::Run() {
       repeat_times.push_back(*(temp->template data<int>()));
     }
   }
+  
+  if(! param.repeat_times_tensor.empty()) {
+    size_t repeat_times_tensor_size = param.repeat_times_tensor.size();
+    for(size_t i=0; i<repeat_times_tensor_size; i++) {
+      repeat_times.push_back(param.repeat_times_tensor[i]->template data<int32_t>()[0]);
+    }
+  }
+  if(! param.repeat_times.empty()) {
+    for(auto v: param.repeat_times) {
+      repeat_times.push_back(v);
+    }
+  }
+
   auto in_dims = param.X->dims();
   auto vec_in_dims = in_dims.Vectorize();
   // broadcast for vec_in_dims.size() equal to repeat_times.size()
@@ -65,6 +79,9 @@ void TileCompute<T, PType>::Run() {
   auto& in = param.X;
   auto& out = param.Out;
   out->Resize(out_dims);
+  if(param.my_debug_Out_ == "tile_5.tmp_0") {
+    VLOG(3) << "OUTDIM!!: " << out_dims;
+  }
   Tensor tmp_src_tensor;
   Tensor tmp_dst_tensor;
   auto in_data = in->template data<T>();
@@ -94,6 +111,11 @@ void TileCompute<T, PType>::Run() {
     }
   }
   out->CopyDataFrom(tmp_dst_tensor);
+  if(param.my_debug_Out_ == "tile_5.tmp_0") {
+    VLOG(3) << "TILEDEBUG: " << "tile_5";
+    VLOG(3) << "IN DIM: " << in->dims();
+    VLOG(3) << "OUT DIM: " << out->dims();
+  }
 }
 
 }  // namespace host
