@@ -11,7 +11,11 @@ execute_process(
     ${LITE_BUILD_TAILOR}
     ${LITE_BUILD_EXTRA}
     ${LITE_WITH_ARM82_FP16}
-    RESULT_VARIABLE result)
+    RESULT_VARIABLE result
+    ERROR_VARIABLE error)
+if(NOT "${error}" STREQUAL "")
+    message(FATAL_ERROR ${error})
+endif()
 # A trick to generate the paddle_use_ops.h
 execute_process(
     COMMAND python ${CMAKE_SOURCE_DIR}/lite/tools/cmake_tools/parse_op_registry.py
@@ -20,7 +24,11 @@ execute_process(
     "${LITE_OPTMODEL_DIR}/.tailored_ops_list"
     ${LITE_BUILD_TAILOR}
     ${LITE_BUILD_EXTRA}
-    RESULT_VARIABLE result)
+    RESULT_VARIABLE result
+    ERROR_VARIABLE error)
+if(NOT "${error}" STREQUAL "")
+    message(FATAL_ERROR ${error})
+endif()
 #----------------------------------------------- NOT CHANGE ---------------------------------------
 
 set(LIGHT_API_SRC  light_api.cc paddle_api.cc light_api_impl.cc paddle_place.cc)
@@ -43,9 +51,6 @@ if(LITE_WITH_FPGA)
 endif()
 if(LITE_WITH_BM)
     set(external_libs_DEPS ${external_libs_DEPS} ${bm_deps})
-endif()
-if(LITE_WITH_RKNPU)
-    set(external_libs_DEPS ${external_libs_DEPS} ${rknpu_deps})
 endif()
 if(LITE_WITH_INTEL_FPGA)
     set(external_libs_DEPS ${external_libs_DEPS} ${intel_fpga_deps})
@@ -164,10 +169,6 @@ else()
         if (LITE_WITH_NPU)
             # Need to add HIAI runtime libs (libhiai.so) dependency
             target_link_libraries(paddle_light_api_shared ${npu_builder_libs} ${npu_runtime_libs})
-        endif()
-        if (LITE_WITH_RKNPU)
-            # Need to add RKNPU runtime libs dependency
-            target_link_libraries(paddle_light_api_shared ${rknpu_builder_libs} ${rknpu_runtime_libs})
         endif()
 
         # 3. produce java lib from `PADDLELITE_OBJS` if LITE_WITH_JAVA=ON

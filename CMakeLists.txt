@@ -19,7 +19,7 @@ set(PADDLE_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # c++ standard
-if(LITE_WITH_XTCL OR LITE_WITH_METAL)
+if(LITE_WITH_METAL)
   set(CMAKE_CXX_STANDARD 14)
 else()
   set(CMAKE_CXX_STANDARD 11)
@@ -57,11 +57,9 @@ lite_option(LITE_WITH_X86                      "Enable X86 in lite mode"        
 lite_option(LITE_WITH_ARM                      "Enable ARM in lite mode"                                              OFF)
 lite_option(LITE_WITH_SW                       "Enable SW in lite mode"                                               OFF)
 lite_option(LITE_WITH_NPU                      "Enable NPU in lite mode"                                              OFF)
-lite_option(LITE_WITH_RKNPU                    "Enable RKNPU in lite mode"                                            OFF)
 lite_option(LITE_WITH_MLU                      "Enable MLU in lite mode"                                              OFF)
 lite_option(LITE_WITH_NNADAPTER                "Enable NNAdapter in lite mode"                                        OFF)
 lite_option(LITE_WITH_XPU                      "Enable XPU in lite mode"                                              OFF)
-lite_option(LITE_WITH_XTCL                     "Enable XPU via XTCL"                                                  OFF IF LITE_WITH_XPU)
 lite_option(LITE_WITH_BM                       "Enable BM in lite mode"                                               OFF)
 lite_option(LITE_WITH_TRAIN                    "Enable training operators and kernels in lite"                        OFF)
 lite_option(LITE_WITH_OPENMP                   "Enable OpenMP in lite framework"                                      ON)
@@ -90,6 +88,8 @@ lite_option(LITE_WITH_XCODE                    "when debug in xcode, its ON."   
 lite_option(LITE_WITH_ARM82_FP16               "when compile with arm v8.2 fp16, it's ON."                            OFF)
 lite_option(LITE_WITH_ARM82_INT8_SDOT          "when compile with arm v8.2 int8, it's ON."                            OFF)
 lite_option(LITE_WITH_CODE_META_INFO           "include git version in the header file."                              ON)
+# whether convert input model which is not a DAG to SSA graph
+lite_option(WITH_CONVERT_TO_SSA           "whether convert input model which is not a DAG to SSA graph"               ON)
 
 # Thirdparty
 set(THIRD_PARTY_PATH "${CMAKE_BINARY_DIR}/third_party" CACHE STRING

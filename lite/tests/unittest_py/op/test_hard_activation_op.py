@@ -41,10 +41,40 @@ class TestHardActivationOp(AutoScanTest):
             DataLayoutType.NCHW,
             thread=[1, 2, 4])
         self.enable_testing_on_place(
+            TargetType.ARM,
+            PrecisionType.FP16,
+            DataLayoutType.NCHW,
+            thread=[1, 2, 4])
+        self.enable_testing_on_place(
             TargetType.Host,
             PrecisionType.FP32,
             DataLayoutType.NCHW,
             thread=[1, 2])
+        opencl_places = [
+            Place(TargetType.OpenCL, PrecisionType.FP16,
+                  DataLayoutType.ImageDefault), Place(
+                      TargetType.OpenCL, PrecisionType.FP16,
+                      DataLayoutType.ImageFolder),
+            Place(TargetType.OpenCL, PrecisionType.FP32, DataLayoutType.NCHW),
+            Place(TargetType.OpenCL, PrecisionType.Any,
+                  DataLayoutType.ImageDefault), Place(
+                      TargetType.OpenCL, PrecisionType.Any,
+                      DataLayoutType.ImageFolder),
+            Place(TargetType.OpenCL, PrecisionType.Any, DataLayoutType.NCHW),
+            Place(TargetType.Host, PrecisionType.FP32)
+        ]
+        self.enable_testing_on_place(places=opencl_places)
+        metal_places = [
+            Place(TargetType.Metal, PrecisionType.FP32,
+                  DataLayoutType.MetalTexture2DArray),
+            Place(TargetType.Metal, PrecisionType.FP16,
+                  DataLayoutType.MetalTexture2DArray),
+            Place(TargetType.ARM, PrecisionType.FP32),
+            Place(TargetType.Host, PrecisionType.FP32)
+        ]
+        self.enable_testing_on_place(places=metal_places)
+        self.enable_testing_on_place(TargetType.NNAdapter, PrecisionType.FP32)
+        self.enable_devices_on_nnadapter(device_names=["nvidia_tensorrt"])
 
     def is_program_valid(self,
                          program_config: ProgramConfig,
@@ -93,11 +123,22 @@ class TestHardActivationOp(AutoScanTest):
         return program_config
 
     def sample_predictor_configs(self):
-        return self.get_predictor_configs(), ["hard_swish_and_sigmoid"], (1e-5,
-                                                                          1e-5)
+        atol, rtol = 1e-5, 1e-5
+        target_str = self.get_target()
+        if target_str == "Metal":
+            atol, rtol = 1e-3, 1e-3
+        return self.get_predictor_configs(), ["hard_swish_and_sigmoid"], (atol,
+                                                                          rtol)
 
     def add_ignore_pass_case(self):
-        pass
+        def teller1(program_config, predictor_config):
+            if predictor_config.target() == TargetType.NNAdapter:
+                if program_config.ops[0].type == "hard_sigmoid":
+                    return True
+
+        self.add_ignore_check_case(
+            teller1, IgnoreReasons.PADDLELITE_NOT_SUPPORT,
+            "NNAdapter tensorrt will support hard_sigmoid later.")
 
     def test(self, *args, **kwargs):
         self.run_and_statis(quant=False, max_examples=25)

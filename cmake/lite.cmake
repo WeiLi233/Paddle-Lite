@@ -1,22 +1,37 @@
 set(LITE_URL "http://paddle-inference-dist.bj.bcebos.com" CACHE STRING "inference download url")
 
 function(lite_download_and_uncompress INSTALL_DIR URL FILENAME)
-    message(STATUS "Download inference test stuff: ${FILENAME}")
-    string(REGEX REPLACE "[-%.]" "_" FILENAME_EX ${FILENAME})
-    set(EXTERNAL_PROJECT_NAME "extern_lite_download_${FILENAME_EX}")
-    set(UNPACK_DIR "${INSTALL_DIR}/src/${EXTERNAL_PROJECT_NAME}")
-    ExternalProject_Add(
+  set(options "")
+  set(oneValueArgs MODEL_PATH)
+  set(multiValueArgs "")
+  cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  if(DEFINED args_MODEL_PATH)
+    set(FILE_PATH ${args_MODEL_PATH}/${FILENAME})
+    set(PREFIX ${INSTALL_DIR}/${args_MODEL_PATH})
+    set(DOWNLOAD_DIR ${INSTALL_DIR}/${args_MODEL_PATH})
+  else()
+    set(FILE_PATH ${FILENAME})
+    set(PREFIX ${INSTALL_DIR})
+    set(DOWNLOAD_DIR ${INSTALL_DIR})
+  endif()
+
+  message(STATUS "Download inference test stuff: ${FILE_PATH}")
+  string(REGEX REPLACE "[-%./]" "_" FILENAME_EX ${FILE_PATH})
+  set(EXTERNAL_PROJECT_NAME "extern_lite_download_${FILENAME_EX}")
+  set(UNPACK_DIR "${INSTALL_DIR}/src/${EXTERNAL_PROJECT_NAME}")
+  ExternalProject_Add(
             ${EXTERNAL_PROJECT_NAME}
             ${EXTERNAL_PROJECT_LOG_ARGS}
-            PREFIX                ${INSTALL_DIR}
-            DOWNLOAD_COMMAND      wget --no-check-certificate -q -O ${INSTALL_DIR}/${FILENAME} ${URL}/${FILENAME} && ${CMAKE_COMMAND} -E tar xzf ${INSTALL_DIR}/${FILENAME} && rm -f ${INSTALL_DIR}/${FILENAME}
-            DOWNLOAD_DIR          ${INSTALL_DIR}
+            PREFIX                ${PREFIX}
+            DOWNLOAD_COMMAND      wget --no-check-certificate -q -O ${INSTALL_DIR}/${FILE_PATH} ${URL}/${FILE_PATH} && ${CMAKE_COMMAND} -E tar xzf ${INSTALL_DIR}/${FILE_PATH} && rm -f ${INSTALL_DIR}/${FILE_PATH}
+            DOWNLOAD_DIR          ${DOWNLOAD_DIR}
             DOWNLOAD_NO_PROGRESS  1
             CONFIGURE_COMMAND     ""
             BUILD_COMMAND         ""
             UPDATE_COMMAND        ""
             INSTALL_COMMAND       ""
-    )
+  )
 endfunction()
 
 function (lite_deps TARGET)
@@ -94,12 +109,6 @@ function (lite_deps TARGET)
 
   if (LITE_WITH_NPU)
     foreach(var ${lite_deps_NPU_DEPS})
-      set(deps ${deps} ${var})
-    endforeach(var)
-  endif()
-
-  if (LITE_WITH_RKNPU)
-    foreach(var ${lite_deps_RKNPU_DEPS})
       set(deps ${deps} ${var})
     endforeach(var)
   endif()
@@ -256,9 +265,6 @@ function(lite_cc_binary TARGET)
     endif()
     if(LITE_WITH_XPU)
         target_link_libraries(${TARGET} ${xpu_builder_libs} ${xpu_runtime_libs})
-    endif()
-    if(LITE_WITH_RKNPU)
-        target_link_libraries(${TARGET} ${rknpu_runtime_libs})
     endif()
     if(LITE_WITH_NPU)
         target_link_libraries(${TARGET} ${npu_builder_libs} ${npu_runtime_libs})

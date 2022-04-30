@@ -113,10 +113,10 @@ void conv_compute_2x2_3x3_fp16(const float16_t* input,
   float16_t* g_trans_remain_tmp_data = g_trans_tmp_data + threads * 128;
   bool flag_bias = (bias != nullptr);
   auto act_type = act_param.active_type;
-  float local_alpha = 0.f;
+  float16_t local_alpha = 0.f;
   int flag_act = 0x00;  // relu: 1, relu6: 2, leakey: 3
-  float offset = 0.f;
-  float threshold = 6.f;
+  float16_t offset = 0.f;
+  float16_t threshold = 6.f;
 
   if (act_param.has_active) {
     act_acquire(act_type, flag_act, local_alpha, offset, threshold, act_param);
@@ -377,11 +377,11 @@ void conv_compute_4x4_3x3_fp16(const float16_t* input,
   float16_t* g_trans_tmp_data = g_tmp_data + threads * tmp_data_thread_stride;
   float16_t* g_trans_remain_tmp_data = g_trans_tmp_data + threads * 288;
   auto act_type = act_param.active_type;
-  float local_alpha = 0.f;
+  float16_t local_alpha = 0.f;
   bool flag_bias = (bias != nullptr);
   int flag_act = 0x00;  // relu: 1, relu6: 2, leakey: 3
-  float offset = 0.f;
-  float threshold = 6.f;
+  float16_t offset = 0.f;
+  float16_t threshold = 6.f;
 
   if (act_param.has_active) {
     act_acquire(act_type, flag_act, local_alpha, offset, threshold, act_param);
@@ -809,10 +809,10 @@ void output_trans_c8_post_4x6_fp16(const float16_t* src,
   float16x8_t tmp34a = vaddq_f16(src3, src4);
   float16x8_t tmp34b = vsubq_f16(src3, src4);
 
-  float32x4_t dest0 = vaddq_f16(vaddq_f16(src0, tmp12a), tmp34a);
-  float32x4_t dest2 = vaddq_f16(tmp12a, vmulq_n_f16(tmp34a, 4));
-  float32x4_t dest1 = vaddq_f16(tmp12b, vmulq_n_f16(tmp34b, 2));
-  float32x4_t dest3 =
+  float16x8_t dest0 = vaddq_f16(vaddq_f16(src0, tmp12a), tmp34a);
+  float16x8_t dest2 = vaddq_f16(tmp12a, vmulq_n_f16(tmp34a, 4));
+  float16x8_t dest1 = vaddq_f16(tmp12b, vmulq_n_f16(tmp34b, 2));
+  float16x8_t dest3 =
       vaddq_f16(vaddq_f16(tmp12b, vmulq_n_f16(tmp34b, 8)), src5);
 
   vst1q_f16(dest, dest0);

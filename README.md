@@ -49,7 +49,7 @@ Paddle Lite 提供了 C++、Java、Python 三种 API，并且提供了相应 API
 - [百度 EdgeBoard FPGA 示例](https://paddle-lite.readthedocs.io/zh/develop/demo_guides/fpga.html)
 - [华为麒麟 NPU 示例](https://paddle-lite.readthedocs.io/zh/develop/demo_guides/huawei_kirin_npu.html)
 - [华为昇腾 NPU 示例](https://paddle-lite.readthedocs.io/zh/develop/demo_guides/huawei_ascend_npu.html)
-- [百度昆仑 XPU 示例](https://paddle-lite.readthedocs.io/zh/develop/demo_guides/baidu_xpu.html)
+- [昆仑芯 XPU 示例](https://paddle-lite.readthedocs.io/zh/develop/demo_guides/kunlunxin_xpu.html)
 - [瑞芯微 NPU 示例](https://paddle-lite.readthedocs.io/zh/develop/demo_guides/rockchip_npu.html)
 - [联发科 APU 示例](https://paddle-lite.readthedocs.io/zh/develop/demo_guides/mediatek_apu.html)
 - [比特大陆 NPU 示例](https://paddle-lite.readthedocs.io/zh/develop/demo_guides/bitmain.html)
@@ -76,7 +76,7 @@ Paddle Lite 提供了 C++、Java、Python 三种 API，并且提供了相应 API
 | 百度 EdgeBoard FPGA | - | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg) | - | - |
 | 华为麒麟 NPU | - | - | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg) | - |
 | 华为昇腾 NPU | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg) | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg) | - | - |
-| 百度昆仑 XPU | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg) | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg) | - | - |
+| 昆仑芯 XPU | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg) | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg) | - | - |
 | 瑞芯微 NPU | - | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg) | - | - |
 | 联发科 APU | - | - | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg) | - |
 | 比特大陆 NPU | - | ![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg) | - | - |
@@ -121,10 +121,11 @@ Paddle Lite 的架构设计着重考虑了对多硬件和平台的支持，并�
 ##  交流与反馈
 * AIStuio 实训平台端测部署系列课程：https://aistudio.baidu.com/aistudio/course/introduce/22690
 * 欢迎您通过 [Github Issues](https://github.com/PaddlePaddle/Paddle-Lite/issues) 来提交问题、报告与建议
-* 技术交流微信群：添加 wechat id:baidupaddle，通过后回复关键词「端侧部署」，系统自动邀请加入；技术群 QQ 群: 一群696965088（已满） ；二群，959308808
+* 技术交流微信群：添加 wechat id:baidupaddle或扫描下方微信二维码，添加并回复小助手“端侧”，系统自动邀请加入；技术群 QQ 群: 一群696965088（已满） ；二群，959308808；
 
-<p align="center"><img width="200" height="200"  src="https://user-images.githubusercontent.com/45189361/64117959-1969de80-cdc9-11e9-84f7-e1c2849a004c.jpeg"/>&#8194;&#8194;&#8194;&#8194;&#8194;<img width="200" height="200" margin="500" src="https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/docs/images/qq-group-chat.png"/></p>
-<p align="center">  &#8194;&#8194;&#8194;微信公众号&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;官方技术交流QQ群</p>
+<p align="center"><img width="200" height="200"  src="https://user-images.githubusercontent.com/63448337/162189409-6c0ef74f-82fd-48c9-9fa7-fc3473428a63.png"/>&#8194;&#8194;&#8194;&#8194;&#8194;<img width="200" height="200" margin="500" src="https://github.com/PaddlePaddle/Paddle-Lite/blob/develop/docs/images/qq-group-chat.png"/></p>
+<p align="center">&#8194;&#8194;&#8194;微信公众号&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;&#8194;官方技术交流QQ群 
+
 
 * 如果您对我们的工作感兴趣，也欢迎[加入我们](https://github.com/PaddlePaddle/Paddle-Lite/issues/6091) ！
 
