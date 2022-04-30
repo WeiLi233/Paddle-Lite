@@ -34,8 +34,6 @@ Context::Context(void* device, const char* properties) : device_(device) {
   if (!selected_device_names.empty()) {
     selected_device_names_ =
         string_split<std::string>(selected_device_names, ",");
-  } else {
-    selected_device_names_ = std::vector<std::string>({0});
   }
   NNADAPTER_CHECK_GE(selected_device_names_.size(), 1);
   // Only supports specifying one device
@@ -119,7 +117,7 @@ int Program::CheckInputsAndOutputs(uint32_t input_count,
     // Get actual type
     auto& arg = input_arguments[i];
     NNAdapterOperandType type;
-    arg.access(arg.memory, &type);
+    arg.access(arg.memory, &type, nullptr);
     // Check dimensions count
     uint32_t count = type.dimensions.count;
     int32_t* data = type.dimensions.data;
@@ -156,7 +154,7 @@ int Program::Execute(uint32_t input_count,
     NNADAPTER_CHECK(arg.memory);
     NNADAPTER_CHECK(arg.access);
     auto type = input_types_[arg.index];
-    auto buffer = arg.access(arg.memory, &type);
+    auto buffer = arg.access(arg.memory, &type, nullptr);
     NNADAPTER_CHECK(buffer);
     auto length = GetOperandTypeBufferLength(type);
     ov::Tensor input_tensor = infer_request.get_input_tensor(i);
@@ -172,7 +170,7 @@ int Program::Execute(uint32_t input_count,
     NNADAPTER_CHECK(arg.memory);
     NNADAPTER_CHECK(arg.access);
     auto type = output_types_[arg.index];
-    auto buffer = arg.access(arg.memory, &type);
+    auto buffer = arg.access(arg.memory, &type, nullptr);
     auto length = GetOperandTypeBufferLength(type);
     ov::Tensor output_tensor = infer_request.get_output_tensor(i);
     auto output_size = output_tensor.get_byte_size();
