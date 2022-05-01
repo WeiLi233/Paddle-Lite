@@ -613,6 +613,7 @@ struct FillConstantParam : ParamBase {
   bool force_cpu{false};
   lite::Tensor* in{};
   lite::Tensor* out{};
+  std::string my_out_name_;
 };
 
 struct FillConstantBatchSizeLikeParam : ParamBase {

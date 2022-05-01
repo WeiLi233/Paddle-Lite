@@ -20,6 +20,7 @@
 #include <cmath> // TOOD: remove in the future
 #include <vector> // TODO: ...
 #include <chrono>
+#include "lite/backends/xpu/target_wrapper.h"
 #include "lite/kernels/xpu/fusion_unified_decoding_compute.h"
 #include "lite/backends/xpu/xpu_header_sitter.h"
 #include "lite/core/op_registry.h"
@@ -163,29 +164,214 @@ struct TopKFinish {
 
 
 void FusionUnifiedDecodingCompute::PrepareForRun() {
-  auto& ctx = this->ctx_->As<XPUContext>();
-  int32_t maxptr_size = xdnn::get_max_ptr_size(ctx.GetRawContext());
-  input_max_xpu_guard_ =
-      TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
-  weight_max_xpu_guard_ =
-      TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
-  output_max_xpu_guard_ =
-      TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
+  // auto& ctx = this->ctx_->As<XPUContext>();
+  auto& param = this->Param<param_t>();
+  VLOG(2) << "Prepare for fusion_unified_decoding";
+
+  self_ln_weight_ptr_vec_.resize(param.num_layer_);
+  self_ln_bias_ptr_vec_.resize(param.num_layer_);
+  
+  self_q_weight_ptr_vec_.resize(param.num_layer_);
+  self_q_max_ptr_vec_.resize(param.num_layer_);
+  self_q_bias_ptr_vec_.resize(param.num_layer_);
+
+  self_k_weight_ptr_vec_.resize(param.num_layer_, nullptr);
+  self_k_max_ptr_vec_.resize(param.num_layer_, nullptr);
+  self_k_bias_ptr_vec_.resize(param.num_layer_, nullptr);
+
+  self_v_weight_ptr_vec_.resize(param.num_layer_, nullptr);
+  self_v_max_ptr_vec_.resize(param.num_layer_, nullptr);
+  self_v_bias_ptr_vec_.resize(param.num_layer_, nullptr);
+
+  self_out_weight_ptr_vec_.resize(param.num_layer_);
+  self_out_max_ptr_vec_.resize(param.num_layer_);
+  self_out_bias_ptr_vec_.resize(param.num_layer_);
+  
+  ffn_ln_weight_ptr_vec_.resize(param.num_layer_);
+  ffn_ln_bias_ptr_vec_.resize(param.num_layer_);
+
+  ffn_inter_weight_ptr_vec_.resize(param.num_layer_);
+  ffn_inter_max_ptr_vec_.resize(param.num_layer_);
+  ffn_inter_bias_ptr_vec_.resize(param.num_layer_);
+
+  ffn_out_weight_ptr_vec_.resize(param.num_layer_);
+  ffn_out_max_ptr_vec_.resize(param.num_layer_);
+  ffn_out_bias_ptr_vec_.resize(param.num_layer_);
+
+  ffn_inter_quant_weight_.resize(param.num_layer_);
+  ffn_out_quant_weight_.resize(param.num_layer_);
+  self_key_quant_weight_.resize(param.num_layer_);
+  self_out_quant_weight_.resize(param.num_layer_);
+  self_query_quant_weight_.resize(param.num_layer_);
+  self_value_quant_weight_.resize(param.num_layer_);
+
+  VLOG(2) << "SELF_KEY size " << param.self_k_weight_.size();
+  for(auto k: param.self_k_weight_) {
+    VLOG(2) << k->dims();
+  }
+  for(int i=0; i<param.num_layer_; i++) {
+    ffn_inter_quant_weight_[i] = \
+      TargetWrapperXPU::ConvertCPUWeightToXPUQuantWeight<float, int16_t>(
+        param.ffn_inter_weight_[i]->data<float>(),
+        param.ffn_inter_weight_[i]->dims(),
+        true);
+    ffn_inter_weight_ptr_vec_[i] = \
+      reinterpret_cast<const int16_t*>(ffn_inter_quant_weight_[i].data_ptr_);
+    ffn_inter_max_ptr_vec_[i] = ffn_inter_quant_weight_[i].max_ptr_;
+    ffn_inter_bias_ptr_vec_[i] = param.ffn_inter_bias_[i]->data<float>();
+
+    ffn_out_quant_weight_[i] = \
+      TargetWrapperXPU::ConvertCPUWeightToXPUQuantWeight<float, int16_t>(
+        param.ffn_out_weight_[i]->data<float>(),
+        param.ffn_out_weight_[i]->dims(),
+        true);
+    ffn_out_weight_ptr_vec_[i] = \
+      reinterpret_cast<const int16_t*>(ffn_out_quant_weight_[i].data_ptr_);
+    ffn_out_max_ptr_vec_[i] = ffn_out_quant_weight_[i].max_ptr_;
+    ffn_out_bias_ptr_vec_[i] = param.ffn_out_bias_[i]->data<float>();
+    
+    /*
+    TODO: why self_k dim is [1]??
+    self_key_quant_weight_[i] = \
+      TargetWrapperXPU::ConvertCPUWeightToXPUQuantWeight<float, int16_t>(
+        param.self_k_weight_[i]->data<float>(),
+        param.self_k_weight_[i]->dims(),
+        true);
+    self_k_weight_ptr_vec_[i] = \
+      reinterpret_cast<const int16_t*>(self_key_quant_weight_[i].data_ptr_);
+    self_k_max_ptr_vec_[i] = self_key_quant_weight_[i].max_ptr_;
+    self_k_bias_ptr_vec_[i] = param.self_k_bias_[i]->data<float>();
+    */
+    
+    self_out_quant_weight_[i] = \
+      TargetWrapperXPU::ConvertCPUWeightToXPUQuantWeight<float, int16_t>(
+        param.self_out_weight_[i]->data<float>(),
+        param.self_out_weight_[i]->dims(),
+        true);
+    self_out_weight_ptr_vec_[i] = \
+      reinterpret_cast<const int16_t*>(self_out_quant_weight_[i].data_ptr_);
+    self_out_max_ptr_vec_[i] = self_out_quant_weight_[i].max_ptr_;
+    self_out_bias_ptr_vec_[i] = param.self_out_bias_[i]->data<float>();
+
+    self_query_quant_weight_[i] = \
+      TargetWrapperXPU::ConvertCPUWeightToXPUQuantWeight<float, int16_t>(
+        param.self_q_weight_[i]->data<float>(),
+        param.self_q_weight_[i]->dims(),
+        true);
+    self_q_weight_ptr_vec_[i] = \
+      reinterpret_cast<const int16_t*>(self_query_quant_weight_[i].data_ptr_);
+    self_q_max_ptr_vec_[i] = self_query_quant_weight_[i].max_ptr_;
+    self_q_bias_ptr_vec_[i] = param.self_q_bias_[i]->data<float>();
+    
+    /*
+    self_value_quant_weight_[i] = \
+      TargetWrapperXPU::ConvertCPUWeightToXPUQuantWeight<float, int16_t>(
+        param.self_v_weight_[i]->data<float>(),
+        param.self_v_weight_[i]->dims(),
+        true);
+    self_v_weight_ptr_vec_[i] = \
+      reinterpret_cast<const int16_t*>(self_value_quant_weight_[i].data_ptr_);
+    self_v_max_ptr_vec_[i] = self_value_quant_weight_[i].max_ptr_;
+    self_v_bias_ptr_vec_[i] = param.self_v_bias_[i]->data<float>();
+    */
+
+    self_ln_weight_ptr_vec_[i] = param.self_ln_weight_[i]->data<float>();
+    self_ln_bias_ptr_vec_[i] = param.self_ln_bias_[i]->data<float>();
+
+    ffn_ln_weight_ptr_vec_[i] = param.ffn_ln_weight_[i]->data<float>();
+    ffn_ln_bias_ptr_vec_[i] = param.ffn_ln_bias_[i]->data<float>();
+  }
+
+  trans_quant_weight_ = \
+    TargetWrapperXPU::ConvertCPUWeightToXPUQuantWeight<float, int16_t>(
+      param.trans_weight_->data<float>(), 
+      param.trans_weight_->dims(), 
+      true);
+
+  VLOG(2) << "End for fusion_unified_decoding";
   return;
 }
 
 void FusionUnifiedDecodingCompute::RunDecodingForward() {
-  // auto& param = this->Param<param_t>();
-  // auto& ctx = this->ctx_->As<XPUContext>();
-  // auto* xpu_ctx = ctx.GetRawContext();
-  cout << "A GOOD START" << endl;
+  auto& param = this->Param<param_t>();
+  auto& ctx = this->ctx_->As<XPUContext>();
+  VLOG(2) << "A GOOD START";
+  
+  vector<const float*> test1;
+   xdnn::fusion_unified_decoding<float, int16_t, int16_t>(
+            ctx.GetRawContext(), 
+            param.input_ids_->data<int32_t>(),
+            param.attn_mask_->data<float>(),
+            param.mem_seq_len_->data<int32_t>(),
+            param.type_id_->data<int32_t>(),
+            param.decoder_type_id_->data<int32_t>(),
+            param.logits_mask_->data<float>(),
+            param.word_embedding_->data<float>(),
+            self_ln_weight_ptr_vec_,
+            self_ln_bias_ptr_vec_,
+            self_q_weight_ptr_vec_,
+            self_q_max_ptr_vec_,
+            self_q_bias_ptr_vec_,
+            self_k_weight_ptr_vec_,
+            self_k_max_ptr_vec_,
+            self_k_bias_ptr_vec_,
+            self_v_weight_ptr_vec_,
+            self_v_max_ptr_vec_,
+            self_v_bias_ptr_vec_,
+            self_out_weight_ptr_vec_,
+            self_out_max_ptr_vec_,
+            self_out_bias_ptr_vec_,
+            ffn_ln_weight_ptr_vec_,
+            ffn_ln_bias_ptr_vec_,
+            ffn_inter_weight_ptr_vec_,
+            ffn_inter_max_ptr_vec_,
+            ffn_inter_bias_ptr_vec_,
+            ffn_out_weight_ptr_vec_,
+            ffn_out_max_ptr_vec_,
+            ffn_out_bias_ptr_vec_,
+            param.decoder_ln_weight_->data<float>(),
+            param.decoder_ln_bias_->data<float>(),
+            reinterpret_cast<const int16_t*>(trans_quant_weight_.data_ptr_),
+            trans_quant_weight_.max_ptr_,
+            param.trans_bias_->data<float>(),
+            param.lm_ln_weight_->data<float>(),
+            param.lm_ln_bias_->data<float>(),
+            param.embedding_weight_->data<float>(),
+            param.embedding_bias_->data<float>(),
+            param.positional_embedding_weight_->data<float>(),
+            param.type_embedding_weight_->data<float>(),
+            param.role_id_->data<int32_t>(),
+            param.decoder_role_id_->data<int32_t>(),
+            param.role_embedding_table_->data<float>(),
+            param.position_ids_->data<int32_t>(),
+            param.decoder_position_ids_->data<int32_t>(),
+            param.output_ids_->mutable_data<int32_t>(),
+            param.output_scores_->mutable_data<float>(),
+            param.parent_ids_->mutable_data<int32_t>(),
+            param.sequence_length_->mutable_data<int32_t>(),
+            param.decoding_strategy_,
+            param.beam_size_,
+            param.topk_,
+            param.topp_,
+            param.n_head_,
+            param.size_per_head_,
+            param.num_layer_,
+            param.bos_id_,
+            param.eos_id_,
+            param.max_len_,
+            param.beam_search_diversity_rate_,
+            param.unk_id_,
+            param.mask_id_,
+            param.temperature_,
+            param.len_penalty_,
+            param.normalize_before_,
+            param.pos_bias_,
+            param.hidden_act_,
+            param.rel_len_,
+            param.early_stopping_,
+            param.min_length_); 
 
-  // param.output_ids_->Resize(output_dims);
-  // param.output_ids_->mutable_data<int32_t>(TARGET(kHost));
-  // param.parent_ids_->Resize(parent_ids_dims);
-  // param.parent_ids_->mutable_data<int32_t>(TARGET(kHost));
-  // param.sequence_length_->Resize(sequence_length_dims);
-  // param.sequence_length_->mutable_data<int32_t>(TARGET(kHost));
+  return;
 }
 
 void FusionUnifiedDecodingCompute::Run() {
@@ -204,46 +390,46 @@ REGISTER_LITE_KERNEL(fusion_unified_decoding,
                      kNCHW,
                      paddle::lite::kernels::xpu::FusionUnifiedDecodingCompute,
                      def)
-    .BindInput("AttnMask", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
+    .BindInput("AttnMask", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("DecPositionIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
     .BindInput("DecRoleIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
     .BindInput("DecTypeIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
-    .BindInput("DecoderLayernormBias", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("DecoderLayernormWeight", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("EmbBias", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("EmbWeight", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("FFNInterBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("FFNInterWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("FFNLayernormBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("FFNLayernormWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("FFNOutBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("FFNOutWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
+    .BindInput("DecoderLayernormBias", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("DecoderLayernormWeight", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("EmbBias", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("EmbWeight", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("FFNInterBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("FFNInterWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
+    .BindInput("FFNLayernormBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("FFNLayernormWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("FFNOutBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("FFNOutWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
     .BindInput("InputIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
-    .BindInput("LMLayernormBias", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("LMLayernormWeight", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("LogitsMask", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
+    .BindInput("LMLayernormBias", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("LMLayernormWeight", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("LogitsMask", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("MemSeqLen", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
-    .BindInput("PositionEncEmb", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
+    .BindInput("PositionEncEmb", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("PositionIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
-    .BindInput("RoleEmbedding", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
+    .BindInput("RoleEmbedding", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("RoleIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
-    .BindInput("SelfKeyBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("SelfKeyWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("SelfLayernormBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("SelfLayernormWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("SelfOutBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("SelfOutWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("SelfQueryBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("SelfQueryWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("SelfValueBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("SelfValueWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("TransBias", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFP16))})
-    .BindInput("TransWeight", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFP16))})
-    .BindInput("TypeEmb", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFP16))})
-    .BindInput("TypeIds", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
-    .BindInput("WordEmbedding", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFP16))})
-    .BindOutput("OutputIds", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
-    .BindOutput("OutputScores", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
-    .BindOutput("ParentIds", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
-    .BindOutput("SequenceLength", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
+    .BindInput("SelfKeyBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("SelfKeyWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
+    .BindInput("SelfLayernormBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("SelfLayernormWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("SelfOutBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("SelfOutWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
+    .BindInput("SelfQueryBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("SelfQueryWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
+    .BindInput("SelfValueBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("SelfValueWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
+    .BindInput("TransBias", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("TransWeight", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
+    .BindInput("TypeEmb", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("TypeIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
+    .BindInput("WordEmbedding", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindOutput("OutputIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
+    .BindOutput("OutputScores", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindOutput("ParentIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
+    .BindOutput("SequenceLength", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
     .Finalize();

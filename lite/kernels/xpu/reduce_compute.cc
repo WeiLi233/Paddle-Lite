@@ -14,6 +14,7 @@
 
 #include "lite/kernels/xpu/reduce_compute.h"
 #include <vector>
+#include "lite/api/paddle_place.h"
 #include "lite/backends/xpu/xpu_header_sitter.h"
 #include "lite/core/op_registry.h"
 
@@ -162,6 +163,7 @@ using ReduceMaxFloat32 =
     xpu::ReduceCompute<float, xpu::ReduceMaxFunctor<float>>;
 using ReduceMinFloat32 =
     xpu::ReduceCompute<float, xpu::ReduceMinFunctor<float>>;
+
 
 REGISTER_LITE_KERNEL(reduce_all, kXPU, kFloat, kNCHW, ReduceAll, def)
     .BindInput("X", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kBool))})

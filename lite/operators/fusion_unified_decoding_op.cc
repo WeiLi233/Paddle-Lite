@@ -34,7 +34,7 @@ bool FusionUnifiedDecodingOp::AttachImpl(const cpp::OpDesc& op_desc,
     GetMutableVar<lite::Tensor>(scope, op_desc.Input("AttnMask").front());
   param_.decoder_position_ids_ = \
     GetMutableVar<lite::Tensor>(scope, op_desc.Input("DecPositionIds").front());
-  param_.decoder_role_id_ = \
+  param_.decoder_role_id_ = 
     GetMutableVar<lite::Tensor>(scope, op_desc.Input("DecRoleIds").front());
   param_.decoder_type_id_ = \
     GetMutableVar<lite::Tensor>(scope, op_desc.Input("DecTypeIds").front());
