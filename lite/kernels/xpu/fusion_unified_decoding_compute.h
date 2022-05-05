@@ -20,6 +20,7 @@
 #include "lite/backends/xpu/xpu_quantizer.h"
 #include "lite/core/kernel.h"
 #include "lite/core/op_registry.h"
+#include "lite/core/tensor.h"
 
 namespace paddle {
 namespace lite {
@@ -39,6 +40,8 @@ class FusionUnifiedDecodingCompute
 
   private:
     void RunDecodingForward();
+    
+    xdnn::FusionUnifiedDecodingParam fud_param_;
 
     std::vector<XPUQuantData> ffn_inter_quant_weight_;
     std::vector<XPUQuantData> ffn_out_quant_weight_;

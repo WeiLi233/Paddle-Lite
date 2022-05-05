@@ -24,6 +24,7 @@
 #include "lite/kernels/xpu/fusion_unified_decoding_compute.h"
 #include "lite/backends/xpu/xpu_header_sitter.h"
 #include "lite/core/op_registry.h"
+#include "xpu/refactor/math.h"
 
 using std::cout;
 using std::endl;
@@ -167,6 +168,29 @@ void FusionUnifiedDecodingCompute::PrepareForRun() {
   // auto& ctx = this->ctx_->As<XPUContext>();
   auto& param = this->Param<param_t>();
   VLOG(2) << "Prepare for fusion_unified_decoding";
+  
+  fud_param_.decoding_strategy = param.decoding_strategy_;
+  fud_param_.beam_size = param.beam_size_;
+  fud_param_.topk = param.topk_;
+  fud_param_.topp = param.topp_;
+  fud_param_.n_head = param.n_head_;
+  fud_param_.size_per_head = param.size_per_head_;
+  fud_param_.num_layer = param.num_layer_;
+  fud_param_.bos_id = param.bos_id_;
+  fud_param_.eos_id = param.eos_id_;
+  fud_param_.max_len = param.max_len_;
+  fud_param_.beam_search_diversity_rate = param.beam_search_diversity_rate_;
+  fud_param_.unk_id = param.unk_id_;
+  fud_param_.mask_id = param.mask_id_;
+  fud_param_.temperature = param.temperature_;
+  fud_param_.len_penalty = param.len_penalty_;
+  fud_param_.normalize_before = param.normalize_before_;
+  fud_param_.pos_bias = param.pos_bias_;
+  fud_param_.hidden_act = param.hidden_act_;
+  fud_param_.rel_len = param.rel_len_;
+  fud_param_.early_stopping = param.early_stopping_;
+  fud_param_.min_length = param.min_length_;
+  fud_param_.vocab_size = static_cast<int32_t>(param.word_embedding_->dims()[0]);
 
   self_ln_weight_ptr_vec_.resize(param.num_layer_);
   self_ln_bias_ptr_vec_.resize(param.num_layer_);
@@ -205,10 +229,6 @@ void FusionUnifiedDecodingCompute::PrepareForRun() {
   self_query_quant_weight_.resize(param.num_layer_);
   self_value_quant_weight_.resize(param.num_layer_);
 
-  VLOG(2) << "SELF_KEY size " << param.self_k_weight_.size();
-  for(auto k: param.self_k_weight_) {
-    VLOG(2) << k->dims();
-  }
   for(int i=0; i<param.num_layer_; i++) {
     ffn_inter_quant_weight_[i] = \
       TargetWrapperXPU::ConvertCPUWeightToXPUQuantWeight<float, int16_t>(
@@ -287,7 +307,7 @@ void FusionUnifiedDecodingCompute::PrepareForRun() {
       param.trans_weight_->data<float>(), 
       param.trans_weight_->dims(), 
       true);
-
+  
   VLOG(2) << "End for fusion_unified_decoding";
   return;
 }
@@ -296,9 +316,94 @@ void FusionUnifiedDecodingCompute::RunDecodingForward() {
   auto& param = this->Param<param_t>();
   auto& ctx = this->ctx_->As<XPUContext>();
   VLOG(2) << "A GOOD START";
+  VLOG(2) << "input dim " << param.input_ids_->dims();
+  VLOG(2) << "max len " << fud_param_.max_len; //(20,60)
+
+  const int32_t batch_size = param.input_ids_->dims()[0];
+  const int32_t max_out_len = param.rel_len_ ? \
+                  param.max_len_ + param.input_ids_->dims()[1] : param.max_len_;
   
-  vector<const float*> test1;
-   xdnn::fusion_unified_decoding<float, int16_t, int16_t>(
+  if(param.decoding_strategy_ != "topk_sampling") {
+    CHECK(false) \
+      << "Ony 'topk_sampling' is supported now, your strategy is " \
+      << param.decoding_strategy_;
+  }
+
+  param.output_ids_->Resize({max_out_len, batch_size});
+  param.parent_ids_->Resize({1});
+  param.output_scores_->Resize({batch_size});
+  *(param.sequence_length_) = *(param.mem_seq_len_);
+    
+  
+  // VLOG(1) << "input id is " << param.input_ids_->dims();
+  // VLOG(1) << "emb table is " << param.embedding_weight_->dims();
+  // VLOG(1) << "POSITION ID dim is " << param.position_ids_->dims();
+  // VLOG(1) << "type table is " << param.type_embedding_weight_->dims();
+  // VLOG(1) << "type id dim is " << param.type_id_->dims();
+
+// input dim {20,60}
+// max len 64
+// input id is {20,60}
+// POSITION ID dim is {20,60}
+// type table is {3,2048}
+// type id dim is {20,60}
+  /*
+  cout << "input_ids_ id debug" << endl;
+  cout << "lite id addr is " << param.input_ids_->data<int32_t>() << endl;
+  vector<int32_t> input_cpu(20*60);
+  TargetWrapperXPU::MemcpySync(
+            input_cpu.data(), param.input_ids_->data<int32_t>(), \
+            param.input_ids_->numel()*sizeof(int32_t), IoDirection::DtoH); 
+  for(int i=0; i<param.input_ids_->numel(); i++) {
+    cout << input_cpu[i] << ' ';
+  }
+  cout << endl;
+  */
+  /*
+  vector<int32_t> w_cpu(1200);
+  vector<int32_t> p_cpu(1200);
+  vector<int32_t> t_cpu(1200);
+  TargetWrapperXPU::MemcpySync(
+            w_cpu.data(), param.input_ids_->data<int32_t>(), \
+            param.input_ids_->numel()*sizeof(int32_t), IoDirection::DtoH); 
+  TargetWrapperXPU::MemcpySync(
+            p_cpu.data(), param.position_ids_->data<int32_t>(), \
+            param.input_ids_->numel()*sizeof(int32_t), IoDirection::DtoH); 
+  TargetWrapperXPU::MemcpySync(
+            t_cpu.data(), param.type_id_->data<int32_t>(), \
+            param.input_ids_->numel()*sizeof(int32_t), IoDirection::DtoH); 
+  cout << "id debug" << endl;
+  for(int i=0; i<1200; i++) {
+    cout << w_cpu[i] << '\t' << p_cpu[i] << '\t' << t_cpu[i] << endl;
+  }
+  */
+  cout << "type emb shape is " << param.type_embedding_weight_->dims() << endl;
+  cout << "pos embedding table is " << param.positional_embedding_weight_->dims() << endl;
+  cout << "attn dims is " << param.attn_mask_->dims() << endl;
+  cout << "mem_seq size is " << param.mem_seq_len_->dims() << endl;
+  /*
+  vector<int32_t> mem_cpu(param.mem_seq_len_->numel());
+  TargetWrapperXPU::MemcpySync(
+            mem_cpu.data(), param.mem_seq_len_->data<int32_t>(), \
+            mem_cpu.size() * sizeof(int32_t), IoDirection::DtoH); 
+  cout << "mem seq " << endl;
+  for(auto v:mem_cpu) {
+    cout << v << '\t';
+  }
+  cout << endl;
+  */
+  /*
+  vector<int32_t> att_cpu(20*3600);
+  TargetWrapperXPU::MemcpySync(
+            att_cpu.data(), param.attn_mask_->data<float>(), \
+            20*3600 * sizeof(float), IoDirection::DtoH); 
+  for(int i=0; i<36*20; i++) {
+    cout << att_cpu[i*100] << '\t';
+  }
+  cout << endl;
+  */
+
+  int32_t ret = xdnn::fusion_unified_decoding<float, int16_t, int16_t>(
             ctx.GetRawContext(), 
             param.input_ids_->data<int32_t>(),
             param.attn_mask_->data<float>(),
@@ -349,27 +454,10 @@ void FusionUnifiedDecodingCompute::RunDecodingForward() {
             param.output_scores_->mutable_data<float>(),
             param.parent_ids_->mutable_data<int32_t>(),
             param.sequence_length_->mutable_data<int32_t>(),
-            param.decoding_strategy_,
-            param.beam_size_,
-            param.topk_,
-            param.topp_,
-            param.n_head_,
-            param.size_per_head_,
-            param.num_layer_,
-            param.bos_id_,
-            param.eos_id_,
-            param.max_len_,
-            param.beam_search_diversity_rate_,
-            param.unk_id_,
-            param.mask_id_,
-            param.temperature_,
-            param.len_penalty_,
-            param.normalize_before_,
-            param.pos_bias_,
-            param.hidden_act_,
-            param.rel_len_,
-            param.early_stopping_,
-            param.min_length_); 
+            batch_size,
+            param.input_ids_->dims()[1], 
+            fud_param_);
+  CHECK_EQ(ret, 0) << "Calling fusion_unified_decoding error";
 
   return;
 }
