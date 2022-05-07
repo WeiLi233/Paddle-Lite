@@ -50,6 +50,7 @@ class FusionUnifiedDecodingCompute
     std::vector<XPUQuantData> self_query_quant_weight_;
     std::vector<XPUQuantData> self_value_quant_weight_;
     XPUQuantData trans_quant_weight_;
+    XPUQuantData embedding_quant_weight_;
 
     std::vector<const float*>  self_ln_weight_ptr_vec_;
     std::vector<const float*>  self_ln_bias_ptr_vec_;

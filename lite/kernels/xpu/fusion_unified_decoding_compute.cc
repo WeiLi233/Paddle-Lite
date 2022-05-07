@@ -308,6 +308,12 @@ void FusionUnifiedDecodingCompute::PrepareForRun() {
       param.trans_weight_->dims(), 
       true);
   
+  embedding_quant_weight_ = \
+    TargetWrapperXPU::ConvertCPUWeightToXPUQuantWeight<float, int16_t>(
+      param.embedding_weight_->data<float>(), 
+      param.embedding_weight_->dims(), 
+      true);
+
   VLOG(2) << "End for fusion_unified_decoding";
   return;
 }
@@ -328,67 +334,38 @@ void FusionUnifiedDecodingCompute::RunDecodingForward() {
       << "Ony 'topk_sampling' is supported now, your strategy is " \
       << param.decoding_strategy_;
   }
+  
+  // fud_param_.max_len = max_out_len;
 
   param.output_ids_->Resize({max_out_len, batch_size});
   param.parent_ids_->Resize({1});
   param.output_scores_->Resize({batch_size});
   *(param.sequence_length_) = *(param.mem_seq_len_);
     
-  
-  // VLOG(1) << "input id is " << param.input_ids_->dims();
-  // VLOG(1) << "emb table is " << param.embedding_weight_->dims();
-  // VLOG(1) << "POSITION ID dim is " << param.position_ids_->dims();
-  // VLOG(1) << "type table is " << param.type_embedding_weight_->dims();
-  // VLOG(1) << "type id dim is " << param.type_id_->dims();
-
-// input dim {20,60}
-// max len 64
-// input id is {20,60}
-// POSITION ID dim is {20,60}
-// type table is {3,2048}
-// type id dim is {20,60}
-  /*
-  cout << "input_ids_ id debug" << endl;
-  cout << "lite id addr is " << param.input_ids_->data<int32_t>() << endl;
-  vector<int32_t> input_cpu(20*60);
-  TargetWrapperXPU::MemcpySync(
-            input_cpu.data(), param.input_ids_->data<int32_t>(), \
-            param.input_ids_->numel()*sizeof(int32_t), IoDirection::DtoH); 
-  for(int i=0; i<param.input_ids_->numel(); i++) {
-    cout << input_cpu[i] << ' ';
-  }
-  cout << endl;
-  */
-  /*
-  vector<int32_t> w_cpu(1200);
-  vector<int32_t> p_cpu(1200);
-  vector<int32_t> t_cpu(1200);
-  TargetWrapperXPU::MemcpySync(
-            w_cpu.data(), param.input_ids_->data<int32_t>(), \
-            param.input_ids_->numel()*sizeof(int32_t), IoDirection::DtoH); 
-  TargetWrapperXPU::MemcpySync(
-            p_cpu.data(), param.position_ids_->data<int32_t>(), \
-            param.input_ids_->numel()*sizeof(int32_t), IoDirection::DtoH); 
-  TargetWrapperXPU::MemcpySync(
-            t_cpu.data(), param.type_id_->data<int32_t>(), \
-            param.input_ids_->numel()*sizeof(int32_t), IoDirection::DtoH); 
-  cout << "id debug" << endl;
-  for(int i=0; i<1200; i++) {
-    cout << w_cpu[i] << '\t' << p_cpu[i] << '\t' << t_cpu[i] << endl;
-  }
-  */
   cout << "type emb shape is " << param.type_embedding_weight_->dims() << endl;
   cout << "pos embedding table is " << param.positional_embedding_weight_->dims() << endl;
   cout << "attn dims is " << param.attn_mask_->dims() << endl;
   cout << "mem_seq size is " << param.mem_seq_len_->dims() << endl;
+  cout << "decoder pos ids is " << param.decoder_position_ids_->dims() << endl;
   /*
-  vector<int32_t> mem_cpu(param.mem_seq_len_->numel());
+  cout << "LOGITS MASK " << endl;
+  vector<float> mask_cpu(param.logits_mask_->numel());
   TargetWrapperXPU::MemcpySync(
-            mem_cpu.data(), param.mem_seq_len_->data<int32_t>(), \
-            mem_cpu.size() * sizeof(int32_t), IoDirection::DtoH); 
-  cout << "mem seq " << endl;
-  for(auto v:mem_cpu) {
-    cout << v << '\t';
+            mask_cpu.data(), param.logits_mask_->data<float>(), \
+            mask_cpu.size() * sizeof(float), IoDirection::DtoH); 
+  for(int i=0; i<mask_cpu.size(); i++) {
+    cout << mask_cpu[i] << ' ';
+  }
+  cout << endl;
+  */
+  /*
+  cout << "TEST ATTN " << endl;
+  vector<float> attn_cpu(param.attn_mask_->numel());
+  TargetWrapperXPU::MemcpySync(
+            attn_cpu.data(), param.attn_mask_->data<float>(), \
+            attn_cpu.size() * sizeof(float), IoDirection::DtoH); 
+  for(int i=0; i<attn_cpu.size(); i+=1000) {
+    cout << attn_cpu[i] << '\t';
   }
   cout << endl;
   */
@@ -441,7 +418,8 @@ void FusionUnifiedDecodingCompute::RunDecodingForward() {
             param.trans_bias_->data<float>(),
             param.lm_ln_weight_->data<float>(),
             param.lm_ln_bias_->data<float>(),
-            param.embedding_weight_->data<float>(),
+            reinterpret_cast<const int16_t*>(embedding_quant_weight_.data_ptr_),
+            embedding_quant_weight_.max_ptr_,
             param.embedding_bias_->data<float>(),
             param.positional_embedding_weight_->data<float>(),
             param.type_embedding_weight_->data<float>(),
@@ -485,7 +463,7 @@ REGISTER_LITE_KERNEL(fusion_unified_decoding,
     .BindInput("DecoderLayernormBias", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("DecoderLayernormWeight", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("EmbBias", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
-    .BindInput("EmbWeight", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
+    .BindInput("EmbWeight", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
     .BindInput("FFNInterBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("FFNInterWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
     .BindInput("FFNLayernormBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
