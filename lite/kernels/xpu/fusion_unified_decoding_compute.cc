@@ -340,13 +340,14 @@ void FusionUnifiedDecodingCompute::RunDecodingForward() {
   param.output_ids_->Resize({max_out_len, batch_size});
   param.parent_ids_->Resize({1});
   param.output_scores_->Resize({batch_size});
-  *(param.sequence_length_) = *(param.mem_seq_len_);
+  // *(param.sequence_length_) = *(param.mem_seq_len_);
+  param.sequence_length_->Resize({batch_size});
     
-  cout << "type emb shape is " << param.type_embedding_weight_->dims() << endl;
-  cout << "pos embedding table is " << param.positional_embedding_weight_->dims() << endl;
-  cout << "attn dims is " << param.attn_mask_->dims() << endl;
-  cout << "mem_seq size is " << param.mem_seq_len_->dims() << endl;
-  cout << "decoder pos ids is " << param.decoder_position_ids_->dims() << endl;
+  // cout << "type emb shape is " << param.type_embedding_weight_->dims() << endl;
+  // cout << "pos embedding table is " << param.positional_embedding_weight_->dims() << endl;
+  // cout << "attn dims is " << param.attn_mask_->dims() << endl;
+  // cout << "mem_seq size is " << param.mem_seq_len_->dims() << endl;
+  // cout << "decoder pos ids is " << param.decoder_position_ids_->dims() << endl;
   /*
   cout << "LOGITS MASK " << endl;
   vector<float> mask_cpu(param.logits_mask_->numel());
@@ -436,7 +437,12 @@ void FusionUnifiedDecodingCompute::RunDecodingForward() {
             param.input_ids_->dims()[1], 
             fud_param_);
   CHECK_EQ(ret, 0) << "Calling fusion_unified_decoding error";
-
+  
+  cout << "MYOUTID ";
+  for(int i=0; i<param.sequence_length_->data<int32_t>()[0]; i++) {
+    cout << param.output_ids_->data<int32_t>()[i*batch_size] << ' ';
+  }
+  cout << endl;
   return;
 }
 
@@ -494,8 +500,8 @@ REGISTER_LITE_KERNEL(fusion_unified_decoding,
     .BindInput("TypeEmb", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("TypeIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
     .BindInput("WordEmbedding", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
-    .BindOutput("OutputIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
-    .BindOutput("OutputScores", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
-    .BindOutput("ParentIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
-    .BindOutput("SequenceLength", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
+    .BindOutput("OutputIds", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
+    .BindOutput("OutputScores", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
+    .BindOutput("ParentIds", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
+    .BindOutput("SequenceLength", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
     .Finalize();
