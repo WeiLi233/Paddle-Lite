@@ -13,10 +13,8 @@
 // limitations under the License.
 
 #include <vector>
-#include <fstream> // TODO: remove in the future
 #include <memory>
 #include <algorithm>
-#include <array>
 #include <cmath> // TOOD: remove in the future
 #include <vector> // TODO: ...
 #include <chrono>
@@ -29,140 +27,11 @@
 using std::cout;
 using std::endl;
 using std::vector;
-using std::array;
-using std::ifstream;
 
 namespace paddle {
 namespace lite {
 namespace kernels {
 namespace xpu {
-
-template<typename T>
-struct DenseWeight{
-    const T* kernel{};
-    const T* bias{};
-};
-
-template<typename T>
-struct LayerNormWeight{
-    const T* gamma{};
-    const T* beta{};
-};
-
-template<typename T>
-struct AttentionWeight{
-    DenseWeight<T> query_weight;
-    DenseWeight<T> key_weight;
-    DenseWeight<T> value_weight;
-    DenseWeight<T> attention_output_weight;
-};
-
-template<typename T>
-struct FFNWeight{
-    DenseWeight<T> intermediate_weight;
-    DenseWeight<T> output_weight;
-};
-
-template <typename T>
-class DecodingInitParam {
-public:
-  /* weights for masked_multi_head_attention */
-  const T *embedding_table{};
-  const T *embedding_kernel{};
-  const T *embedding_bias{};
-
-  // Used for unilm.
-  const T *trans_kernel{};
-  const T *trans_bias{};
-
-  const T *memory_tensor{};
-  const int32_t *type_id{};
-  const int32_t *memory_sequence_length{};
-
-  // Used for force decoding.
-  /// const int32_t *trg_word = nullptr; // TODO: temporarily unseles
-  /// const int32_t *trg_length = nullptr;
-
-  const T *position_encoding_table{};
-
-  // segment table
-  const T *type_table{};
-
-  LayerNormWeight<T> layernorm;
-
-  const T *logits_mask{};
-  int32_t *output_ids{};
-  int32_t *parent_ids{};
-  int32_t *sequence_length{};
-};
-
-template <typename T>
-class DecoderInitParam {
-public:
-
-  /* weights for masked_multi_head_attention */
-  LayerNormWeight<T> self_layernorm;
-  AttentionWeight<T> self_attention;
-
-  LayerNormWeight<T> cross_layernorm;
-  AttentionWeight<T> cross_attention;
-
-  LayerNormWeight<T> ffn_layernorm;
-  FFNWeight<T> ffn;
-
-  int32_t request_batch_size = -1;
-  int32_t request_max_mem_seq_len = -1;
-
-  //const float *k_cache = nullptr;
-  //const float *v_cache = nullptr;
-};
-
-struct TransformerArguments {
-  int32_t batch_size_;
-  int32_t seq_len_;
-  int32_t head_num_;
-  int32_t size_per_head_;
-  int32_t hidden_units_;
-};
-
-struct DecodingArguments : public TransformerArguments {
-  int32_t decoder_layers_;
-  int32_t vocab_size_;
-  int32_t start_id_;
-  int32_t end_id_;
-  int32_t vocab_size_padded_;
-};
-
-struct DecodingBeamsearchArguments : public DecodingArguments{
-  int32_t beam_width_;
-  int32_t temp_storage_size_;
-  float beam_search_diversity_rate_;
-  float alpha_;  // power number for length penalty in beam search v2
-  bool normalization_before_{true};
-  int32_t pos_offset_{0};     // For BART position embedding
-  bool pos_bias_{false};  // For Unified position embedding
-  // ActivationType act_{ActivationType::RELU};
-
-  int32_t memory_max_seq_len_{0};
-  bool prefix_lm_{false};
-  int32_t finished_candidate_num_{-1};
-  bool early_stopping_{false};
-  bool is_mbart_{false};
-};
-
-struct TensorParallelParam {
-  int32_t local_head_num_{0};
-  int32_t local_hidden_units_{0};
-};
-
-template <typename T>
-struct TopKFinish {
-  T u;
-  int32_t idx;
-  int32_t len;
-};
-
-
 
 void FusionUnifiedDecodingCompute::PrepareForRun() {
   // auto& ctx = this->ctx_->As<XPUContext>();
@@ -340,7 +209,6 @@ void FusionUnifiedDecodingCompute::RunDecodingForward() {
   param.output_ids_->Resize({max_out_len, batch_size});
   param.parent_ids_->Resize({1});
   param.output_scores_->Resize({batch_size});
-  // *(param.sequence_length_) = *(param.mem_seq_len_);
   param.sequence_length_->Resize({batch_size});
     
   // cout << "type emb shape is " << param.type_embedding_weight_->dims() << endl;
@@ -359,28 +227,6 @@ void FusionUnifiedDecodingCompute::RunDecodingForward() {
   }
   cout << endl;
   */
-  /*
-  cout << "TEST ATTN " << endl;
-  vector<float> attn_cpu(param.attn_mask_->numel());
-  TargetWrapperXPU::MemcpySync(
-            attn_cpu.data(), param.attn_mask_->data<float>(), \
-            attn_cpu.size() * sizeof(float), IoDirection::DtoH); 
-  for(int i=0; i<attn_cpu.size(); i+=1000) {
-    cout << attn_cpu[i] << '\t';
-  }
-  cout << endl;
-  */
-  /*
-  vector<int32_t> att_cpu(20*3600);
-  TargetWrapperXPU::MemcpySync(
-            att_cpu.data(), param.attn_mask_->data<float>(), \
-            20*3600 * sizeof(float), IoDirection::DtoH); 
-  for(int i=0; i<36*20; i++) {
-    cout << att_cpu[i*100] << '\t';
-  }
-  cout << endl;
-  */
-
   int32_t ret = xdnn::fusion_unified_decoding<float, int16_t, int16_t>(
             ctx.GetRawContext(), 
             param.input_ids_->data<int32_t>(),
@@ -438,11 +284,11 @@ void FusionUnifiedDecodingCompute::RunDecodingForward() {
             fud_param_);
   CHECK_EQ(ret, 0) << "Calling fusion_unified_decoding error";
   
-  cout << "MYOUTID ";
-  for(int i=0; i<param.sequence_length_->data<int32_t>()[0]; i++) {
-    cout << param.output_ids_->data<int32_t>()[i*batch_size] << ' ';
-  }
-  cout << endl;
+  // cout << "MYOUTID ";
+  // for(int i=0; i<param.sequence_length_->data<int32_t>()[0]; i++) {
+  //   cout << param.output_ids_->data<int32_t>()[i*batch_size] << ' ';
+  // }
+  // cout << endl;
   return;
 }
 
