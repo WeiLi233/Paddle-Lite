@@ -73,6 +73,7 @@ bool GatherOp::InferShapeImpl() const {
 }
 
 bool GatherOp::AttachImpl(const cpp::OpDesc &opdesc, lite::Scope *scope) {
+  param_.my_debug_Out_ = opdesc.Output("Out").front();
   param_.X = scope->FindTensor(opdesc.Input("X").front());
   param_.Index = scope->FindTensor(opdesc.Input("Index").front());
   param_.Out = scope->FindMutableTensor(opdesc.Output("Out").front());

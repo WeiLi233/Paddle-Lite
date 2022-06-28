@@ -1407,6 +1407,7 @@ struct GatherNdParam : ParamBase {
 };
 
 struct GatherParam : ParamBase {
+  std::string my_debug_Out_;
   const lite::Tensor* X{};
   const lite::Tensor* Index{};
   const lite::Tensor* Axis{nullptr};

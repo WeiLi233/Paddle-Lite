@@ -1995,13 +1995,13 @@ static void DecodingKernel(
 
 void FusionDecodingCompute::PrepareForRun() {
   auto& ctx = this->ctx_->As<XPUContext>();
-  int32_t maxptr_size = xdnn::get_max_ptr_size(ctx.GetRawContext());
-  input_max_xpu_guard_ =
-      TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
-  weight_max_xpu_guard_ =
-      TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
-  output_max_xpu_guard_ =
-      TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
+  // int32_t maxptr_size = xdnn::get_max_ptr_size(ctx.GetRawContext());
+  // input_max_xpu_guard_ =
+  //     TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
+  // weight_max_xpu_guard_ =
+  //     TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
+  // output_max_xpu_guard_ =
+  //     TargetWrapperXPU::MallocScratchPad(maxptr_size * sizeof(float));
   return;
 }
 

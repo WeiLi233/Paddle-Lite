@@ -29,8 +29,19 @@ void GatherCompute<DataType, IndexType>::Run() {
   auto& ctx = this->ctx_->template As<XPUContext>();
 
   auto x = param.X;
-  auto index = param.Index;
   auto out = param.Out;
+  auto index = param.Index;
+  
+  // if(param.my_debug_Out_ == "slice_0.tmp_0") {
+    std::vector<int32_t> cpu_x(x->data_size());
+    TargetWrapperXPU::MemcpySync(cpu_x.data(), x->raw_data(), x->memory_size(), IoDirection::DtoH);
+    VLOG(2) << "DEBUG GATHER " << param.my_debug_Out_;
+    for(auto v: cpu_x) {
+      std::cout << v << ' ';
+    }
+    std::cout << std::endl;
+  // }
+
   if (out->numel() == 0) {
     out->set_target(TARGET(kXPU));
     return;
