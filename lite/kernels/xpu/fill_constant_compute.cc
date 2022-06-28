@@ -35,6 +35,10 @@ int FillConstantCompute::FillConstData() {
     value = param.value_tensor->template mutable_data<T>()[0];
   }
   auto data = param.out->template mutable_data<T>(TARGET(kXPU));
+  if(write_size == 0) {
+    VLOG(1) << "Filling write size 0";
+    return 0;
+  }
   return xdnn::constant<T>(ctx.GetRawContext(), data, write_size, value);
 }
 
