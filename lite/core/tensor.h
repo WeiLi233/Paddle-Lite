@@ -131,7 +131,7 @@ class TensorLite {
       bool reuse = true) {
     dims_ = dim;
     target_ = TARGET(kMetal);
-    long ptr_this = reinterpret_cast<long>(this);  // NOLINT
+    long ptr_this = reinterpret_cast<long>(this);
     std::string ptr;
     std::stringstream stream;
     stream << ptr_this;
@@ -176,9 +176,6 @@ class TensorLite {
     if (target_ != target && target == TargetType::kXPU) {
       buffer_.reset(new XPUBuffer);
     }
-    if (target_ != target && target == TargetType::kHost) {
-      buffer_.reset(new Buffer);
-    }
 #endif
     target_ = target;
     return mutable_data<T, R>();
@@ -189,9 +186,6 @@ class TensorLite {
 #ifdef LITE_WITH_XPU
     if (target_ != target && target == TargetType::kXPU) {
       buffer_.reset(new XPUBuffer);
-    }
-    if (target_ != target && target == TargetType::kHost) {
-      buffer_.reset(new Buffer);
     }
 #endif
     precision_ = lite_api::PrecisionTypeTrait<T>::Type();
