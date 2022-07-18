@@ -2030,6 +2030,61 @@ struct FusionUnifiedDecodingParam : ParamBase {
   int32_t min_length_{};
 };
 
+// for FastTransformer FusionDecoding Translation
+struct FusionDecodingParam : ParamBase {
+  lite::Tensor* input_{};
+  lite::Tensor* mem_seq_len_{};
+  std::vector<const lite::Tensor*> cross_key_bias_;
+  std::vector<const lite::Tensor*> cross_key_weight_;
+  std::vector<const lite::Tensor*> cross_layernorm_bias_;
+  std::vector<const lite::Tensor*> cross_layernorm_weight_;
+  std::vector<const lite::Tensor*> cross_out_bias_;
+  std::vector<const lite::Tensor*> cross_out_weight_;
+  std::vector<const lite::Tensor*> cross_query_bias_;
+  std::vector<const lite::Tensor*> cross_query_weight_;
+  std::vector<const lite::Tensor*> cross_value_bias_;
+  std::vector<const lite::Tensor*> cross_value_weight_;
+  const lite::Tensor* decoder_layernorm_bias_{};
+  const lite::Tensor* decoder_layernorm_weight_{};
+  const lite::Tensor* emb_bias_{};
+  const lite::Tensor* emb_weight_{};
+  std::vector<const lite::Tensor*> ffn_inter_bias_;
+  std::vector<const lite::Tensor*> ffn_inter_weight_;
+  std::vector<const lite::Tensor*> ffn_layernorm_bias_;
+  std::vector<const lite::Tensor*> ffn_layernorm_weight_;
+  std::vector<const lite::Tensor*> ffn_out_bias_;
+  std::vector<const lite::Tensor*> ffn_out_weight_;
+  const lite::Tensor* position_enc_emb_{};
+  std::vector<const lite::Tensor*> self_key_bias_;
+  std::vector<const lite::Tensor*> self_key_weight_;
+  std::vector<const lite::Tensor*> self_layernorm_bias_;
+  std::vector<const lite::Tensor*> self_layernorm_weight_;
+  std::vector<const lite::Tensor*> self_out_bias_;
+  std::vector<const lite::Tensor*> self_out_weight_;
+  std::vector<const lite::Tensor*> self_query_bias_;
+  std::vector<const lite::Tensor*> self_query_weight_;
+  std::vector<const lite::Tensor*> self_value_bias_;
+  std::vector<const lite::Tensor*> self_value_weight_;
+  const lite::Tensor* word_embedding_{};
+  lite::Tensor* output_ids_{};
+  lite::Tensor* parent_ids_{};
+  lite::Tensor* sequence_length_{};
+
+  std::string decoding_strategy_;
+  int32_t beam_size_{};
+  int32_t topk_{};
+  float topp_{};
+  int32_t n_head_{};
+  int32_t size_per_head_{};
+  int32_t num_layer_{};
+  int32_t bos_id_{};
+  int32_t eos_id_{};
+  int64_t max_len_{};
+  float beam_search_diversity_rate_{};
+  float alpha_{};
+  bool rel_len_{};
+};
+
 // For DeformableConvolution op
 struct DeformableConvParam : ParamBase {
   lite::Tensor* x{};

@@ -238,6 +238,7 @@ add_operator(__xpu__bigru_op extra SRCS __xpu__bigru_op.cc)
 add_operator(__xpu__dynamic_lstm_fuse_op extra SRCS __xpu__dynamic_lstm_fuse_op.cc)
 add_operator(__xpu__multi_softmax_op extra SRCS __xpu__multi_softmax_op.cc)
 add_operator(fusion_unified_decoding_op extra SRCS fusion_unified_decoding_op.cc)
+add_operator(fusion_decoding_op extra SRCS fusion_decoding_op.cc)
 
 # Only for FPGA
 add_operator(fpga_conv_op extra SRCS __fpga__conv_op.cc)
