@@ -242,6 +242,10 @@ void FusionDecodingCompute::Run() {
   std::vector<int64_t> sequence_length_dims({batch_size});
   if (param.decoding_strategy_ == "beam_search") {
     // TODO
+    sequence_length_dims = {batch_size};
+    batch_size /= param.beam_size_;
+    output_dims = {max_out_len, batch_size, param.beam_size_};
+    parent_ids_dims = output_dims;
   } else if (param.decoding_strategy_ == "beam_search_v2") {
     sequence_length_dims = {batch_size * 2};
     batch_size /= param.beam_size_;
