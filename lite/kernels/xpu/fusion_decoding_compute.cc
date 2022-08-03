@@ -18,12 +18,13 @@
 // #include <algorithm>
 // #include <array>
 // #include <cmath> // TOOD: remove in the future
-// #include <chrono>
+#include <chrono>
 #include "lite/core/target_wrapper.h"
 #include "lite/kernels/xpu/fusion_decoding_compute.h"
 #include "lite/utils/log/logging.h"
 #include "xpu/refactor/fusion.h"
 
+using namespace std::chrono;
 using std::cout;
 using std::endl;
 using std::vector;
@@ -233,7 +234,7 @@ void FusionDecodingCompute::PrepareForRun() {
 void FusionDecodingCompute::Run() {
   auto& param = this->Param<param_t>();
   auto& ctx = this->ctx_->As<XPUContext>();
-
+  // cout << "INPUT DIM IS " << param.input_->dims() << endl;
   int32_t batch_size = param.input_->dims()[0];
   const int32_t max_out_len = param.rel_len_ ?  param.max_len_ + param.input_->dims()[1] : param.max_len_;
   
@@ -262,6 +263,7 @@ void FusionDecodingCompute::Run() {
   param.parent_ids_->Resize(parent_ids_dims);
   param.sequence_length_->Resize(sequence_length_dims);
   VLOG(2) << "DEBUG: EMB WEIGHT DIM IS " << param.emb_weight_->dims();
+  auto s = steady_clock::now();
   int32_t ret = xdnn::fasttransformer_decoding<float, int16_t, int16_t>(
                   ctx.GetRawContext(),
                   param.input_->data<float>(), param.mem_seq_len_->data<int32_t>(), param.word_embedding_->data<float>(),
@@ -281,12 +283,14 @@ void FusionDecodingCompute::Run() {
                   param.decoder_layernorm_weight_->data<float>(), param.decoder_layernorm_bias_->data<float>(),
                   reinterpret_cast<const int16_t*>(emb_quant_weight_.data_ptr_), emb_quant_weight_.max_ptr_,
                   param.emb_bias_->data<float>(), param.position_enc_emb_->data<float>(),
-                  param.output_ids_->mutable_data<int32_t>(TARGET(kHost)),
-                  param.parent_ids_->mutable_data<int32_t>(TARGET(kHost)),
-                  param.sequence_length_->mutable_data<int32_t>(TARGET(kHost)),
+                  param.output_ids_->mutable_data<int32_t>(),
+                  param.parent_ids_->mutable_data<int32_t>(),
+                  param.sequence_length_->mutable_data<int32_t>(),
                   batch_size, param.input_->dims()[1], fd_param_);
   
   CHECK_EQ(ret, 0) << "CALLING fasttransformer_decoding error.";
+  auto t = steady_clock::now();
+  cout << "fusiondecoding cost: " << duration_cast<milliseconds>(t-s).count() << endl;
   return;
 
 
@@ -337,7 +341,7 @@ REGISTER_LITE_KERNEL(fusion_decoding,
     .BindInput("SelfValueBias@VECTOR", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfValueWeight@VECTOR", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kFloat))})
     .BindInput("WordEmbedding", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kFloat))})
-    .BindOutput("OutputIds", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
-    .BindOutput("ParentIds", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
-    .BindOutput("SequenceLength", {LiteType::GetTensorTy(TARGET(kHost), PRECISION(kInt32))})
+    .BindOutput("OutputIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
+    .BindOutput("ParentIds", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
+    .BindOutput("SequenceLength", {LiteType::GetTensorTy(TARGET(kXPU), PRECISION(kInt32))})
     .Finalize();

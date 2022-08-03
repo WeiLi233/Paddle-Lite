@@ -16,7 +16,6 @@
 #include <memory>
 #include <algorithm>
 #include <cmath> // TOOD: remove in the future
-#include <vector> // TODO: ...
 #include <chrono>
 #include "lite/backends/xpu/target_wrapper.h"
 #include "lite/kernels/xpu/fusion_unified_decoding_compute.h"

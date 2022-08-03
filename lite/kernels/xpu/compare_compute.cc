@@ -58,6 +58,18 @@ struct GreaterThanFunctor {
   }
 };
 
+template <typename T>
+struct NotEqualFunctor {
+  inline int operator()(xdnn::Context* ctx,
+                        const T* x,
+                        const T* y,
+                        bool* z,
+                        const std::vector<int>& xshape,
+                        const std::vector<int>& yshape) const {
+    return xdnn::broadcast_not_equal<T>(ctx, x, y, z, xshape, yshape);
+  }
+};
+
 template <PrecisionType PType, class T, class Functor>
 void CompareCompute<PType, T, Functor>::Run() {
   auto& param = this->template Param<operators::CompareParam>();
@@ -297,4 +309,24 @@ REGISTER_LITE_KERNEL(
                                        PRECISION(kBool),
                                        DATALAYOUT(kAny))})
     .BindPaddleOpVersion("greater_than", 1)
+    .Finalize();
+
+using not_equal_int64 = paddle::lite::kernels::xpu::CompareCompute<
+    PRECISION(kFloat),
+    int64_t,
+    paddle::lite::kernels::xpu::NotEqualFunctor<int64_t>>;
+REGISTER_LITE_KERNEL(
+    not_equal, kXPU, kFloat, kAny, not_equal_int64, int64)
+    .BindInput("X",
+               {LiteType::GetTensorTy(TARGET(kXPU),
+                                      PRECISION(kInt64),
+                                      DATALAYOUT(kAny))})
+    .BindInput("Y",
+               {LiteType::GetTensorTy(TARGET(kXPU),
+                                      PRECISION(kInt64),
+                                      DATALAYOUT(kAny))})
+    .BindOutput("Out",
+                {LiteType::GetTensorTy(TARGET(kXPU),
+                                       PRECISION(kBool),
+                                       DATALAYOUT(kAny))})
     .Finalize();

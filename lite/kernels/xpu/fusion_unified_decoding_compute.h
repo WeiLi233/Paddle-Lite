@@ -15,12 +15,8 @@
 #pragma once
 
 #include <vector>
-#include <memory>
 #include "lite/backends/xpu/xpu_header_sitter.h"
-#include "lite/backends/xpu/xpu_quantizer.h"
-#include "lite/core/kernel.h"
 #include "lite/core/op_registry.h"
-#include "lite/core/tensor.h"
 
 namespace paddle {
 namespace lite {
