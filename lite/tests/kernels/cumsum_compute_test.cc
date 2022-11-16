@@ -85,7 +85,7 @@ class CumsumComputeTester : public arena::TestCase {
     }
   }
 
-  void PrepareOpDesc(cpp::OpDesc* op_desc) {
+  void PrepareOpDesc(cpp::OpDesc* op_desc) override {
     op_desc->SetType("cumsum");
     op_desc->SetInput("X", {x_});
     op_desc->SetOutput("Out", {out_});
@@ -163,6 +163,10 @@ TEST(cumsum, precision) {
   TestCumsumAxis<float>(place, abs_error);
   TestCumsumAxis<int32_t>(place, abs_error);
   TestCumsumAxis<int64_t>(place, abs_error);
+  return;
+#elif defined(NNADAPTER_WITH_QUALCOMM_QNN)
+  abs_error = 1e-2;
+  TestCumsumAxis<int32_t>(place, abs_error);
   return;
 #else
   return;

@@ -113,7 +113,7 @@ class ConcateComputeTester : public arena::TestCase {
     }
   }
 
-  void PrepareOpDesc(cpp::OpDesc* op_desc) {
+  void PrepareOpDesc(cpp::OpDesc* op_desc) override {
     op_desc->SetType("concat");
     op_desc->SetInput("X", x_vct_);
     op_desc->SetAttr("axis", axis_);
@@ -159,16 +159,14 @@ TEST(Concat, precision) {
 #elif defined(NNADAPTER_WITH_INTEL_OPENVINO)
   abs_error = 1e-5;
   use_axis_tensor = std::vector<bool>{false};
+#elif defined(NNADAPTER_WITH_QUALCOMM_QNN)
+  abs_error = 1e-2;
+  use_axis_tensor = std::vector<bool>{false};
 #else
   return;
 #endif
 #elif defined(LITE_WITH_XPU)
   place = TARGET(kXPU);
-  use_axis_tensor = std::vector<bool>{false};
-#elif defined(LITE_WITH_NPU)
-  place = TARGET(kNPU);
-  abs_error = 1e-2;  // use fp16 in npu
-  axes = std::vector<int>{1, 2};
   use_axis_tensor = std::vector<bool>{false};
 #elif defined(LITE_WITH_ARM)
   place = TARGET(kARM);

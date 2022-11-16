@@ -119,7 +119,7 @@ class AdaptivePoolTester : public arena::TestCase {
     }
   }
 
-  void PrepareOpDesc(cpp::OpDesc* op_desc) {
+  void PrepareOpDesc(cpp::OpDesc* op_desc) override {
     op_desc->SetType(op_type_);
     op_desc->SetInput("X", {x_});
     op_desc->SetOutput("Out", {out_});
@@ -171,6 +171,8 @@ TEST(AdaptiveAveragePool2D, precision) {
 #if defined(NNADAPTER_WITH_HUAWEI_ASCEND_NPU)
   abs_error = 1e-2;
 #elif defined(NNADAPTER_WITH_CAMBRICON_MLU)
+  abs_error = 1e-3;
+#elif defined(NNADAPTER_WITH_INTEL_OPENVINO)
   abs_error = 1e-3;
 #else
   return;

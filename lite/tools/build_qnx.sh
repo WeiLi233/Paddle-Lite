@@ -31,7 +31,9 @@ WITH_OPENCL=OFF
 WITH_NNADAPTER=OFF
 NNADAPTER_WITH_QUALCOMM_QNN=OFF
 NNADAPTER_QUALCOMM_QNN_SDK_ROOT="/usr/local/qnn"
-NNADAPTER_QUALCOMM_HEXAGON_TOOLS_ROOT=
+NNADAPTER_QUALCOMM_HEXAGON_SDK_ROOT=
+NNADAPTER_WITH_FAKE_DEVICE=OFF
+NNADAPTER_FAKE_DEVICE_SDK_ROOT=""
 
 # options of adding training ops
 WITH_TRAIN=OFF
@@ -44,8 +46,6 @@ WITH_PROFILE=OFF
 WITH_PRECISION_PROFILE=OFF
 # option of benchmark, default is OFF
 WITH_BENCHMARK=OFF
-# option of light weight framework, default is OFF
-WITH_LIGHT_WEIGHT_FRAMEWORK=OFF
 # num of threads used during compiling..
 readonly NUM_PROC=${LITE_BUILD_THREADS:-4}
 #####################################################################################################
@@ -56,17 +56,16 @@ readonly NUM_PROC=${LITE_BUILD_THREADS:-4}
 #####################################################################################################
 # url that stores third-party tar.gz file to accelerate third-party lib installation
 readonly THIRDPARTY_URL=https://paddlelite-data.bj.bcebos.com/third_party_libs/
-readonly THIRDPARTY_TAR=third-party-91a9ab3.tar.gz
+readonly THIRDPARTY_TAR=third-party-651c7c4.tar.gz
 
 # absolute path of Paddle-Lite.
 readonly workspace=$PWD/$(dirname $0)/../../
 # basic options for linux compiling.
-readonly CMAKE_COMMON_OPTIONS="-DWITH_LITE=ON \
-                            -DCMAKE_BUILD_TYPE=Release \
-                            -DWITH_MKL=OFF \
-			    -DWITH_MKLDNN=OFF \
-                            -DWITH_TESTING=OFF \
-			    -DLITE_WITH_OPENMP=OFF"
+readonly CMAKE_COMMON_OPTIONS="-DCMAKE_BUILD_TYPE=Release \
+                               -DWITH_MKL=OFF \
+                               -DWITH_MKLDNN=OFF \
+                               -DWITH_TESTING=OFF \
+                               -DLITE_WITH_OPENMP=OFF"
 
 # function of set options for benchmark
 function set_benchmark_options {
@@ -78,9 +77,7 @@ function set_benchmark_options {
     # Linux. Otherwise opencl is not supported on Linux. See link for more info:
     # https://software.intel.com/content/www/us/en/develop/articles/opencl-drivers.html
     WITH_OPENCL=OFF
-    WITH_LIGHT_WEIGHT_FRAMEWORK=OFF
   else
-    WITH_LIGHT_WEIGHT_FRAMEWORK=ON
     WITH_OPENCL=ON
   fi
   if [ ${WITH_PROFILE} == "ON" ] || [ ${WITH_PRECISION_PROFILE} == "ON" ]; then
@@ -108,7 +105,6 @@ function init_cmake_mutable_options {
 
     arm_arch=$ARCH
     arm_target_os=qnx
-    WITH_LIGHT_WEIGHT_FRAMEWORK=ON
     WITH_AVX=OFF
 
     if [ "${WITH_STRIP}" == "ON" ]; then
@@ -124,7 +120,6 @@ function init_cmake_mutable_options {
                         -DARM_TARGET_ARCH_ABI=$arm_arch \
                         -DARM_TARGET_OS=$arm_target_os \
                         -DARM_TARGET_LANG=$TOOLCHAIN \
-                        -DLITE_WITH_LIGHT_WEIGHT_FRAMEWORK=$WITH_LIGHT_WEIGHT_FRAMEWORK \
                         -DLITE_BUILD_EXTRA=$WITH_EXTRA \
                         -DLITE_WITH_PYTHON=$WITH_PYTHON \
                         -DPY_VERSION=$PY_VERSION \
@@ -141,7 +136,9 @@ function init_cmake_mutable_options {
                         -DLITE_WITH_NNADAPTER=$WITH_NNADAPTER \
                         -DNNADAPTER_WITH_QUALCOMM_QNN=$NNADAPTER_WITH_QUALCOMM_QNN \
                         -DNNADAPTER_QUALCOMM_QNN_SDK_ROOT=$NNADAPTER_QUALCOMM_QNN_SDK_ROOT \
-                        -DNNADAPTER_QUALCOMM_HEXAGON_TOOLS_ROOT=$NNADAPTER_QUALCOMM_HEXAGON_TOOLS_ROOT \
+                        -DNNADAPTER_QUALCOMM_HEXAGON_SDK_ROOT=$NNADAPTER_QUALCOMM_HEXAGON_SDK_ROOT \
+                        -DNNADAPTER_WITH_FAKE_DEVICE=$NNADAPTER_WITH_FAKE_DEVICE \
+                        -DNNADAPTER_FAKE_DEVICE_SDK_ROOT=$NNADAPTER_FAKE_DEVICE_SDK_ROOT \
                         -DLITE_WITH_PROFILE=${WITH_PROFILE} \
                         -DLITE_WITH_ARM82_FP16=$BUILD_ARM82_FP16 \
                         -DLITE_WITH_PRECISION_PROFILE=${WITH_PRECISION_PROFILE} \
@@ -367,13 +364,21 @@ function main {
             --nnadapter_with_qualcomm_qnn=*)
                 NNADAPTER_WITH_QUALCOMM_QNN="${i#*=}"
                 shift
-		;;
+                ;;
             --nnadapter_qualcomm_qnn_sdk_root=*)
                 NNADAPTER_QUALCOMM_QNN_SDK_ROOT="${i#*=}"
                 shift
                 ;;
-            --nnadapter_qualcomm_hexagon_tools_root=*)
-                NNADAPTER_QUALCOMM_HEXAGON_TOOLS_ROOT="${i#*=}"
+            --nnadapter_qualcomm_hexagon_sdk_root=*)
+                NNADAPTER_QUALCOMM_HEXAGON_SDK_ROOT="${i#*=}"
+                shift
+                ;;
+            --nnadapter_with_fake_device=*)
+                NNADAPTER_WITH_FAKE_DEVICE="${i#*=}"
+                shift
+                ;;
+            --nnadapter_fake_device_sdk_root=*)
+                NNADAPTER_FAKE_DEVICE_SDK_ROOT="${i#*=}"
                 shift
                 ;;
             # controls whether to include FP16 kernels, default is OFF

@@ -176,8 +176,6 @@ class LITE_API Predictor {
 #ifdef LITE_WITH_XPU
     lite::TargetWrapperXPU::FreeL3Cache();
 #endif
-
-    ClearTensorArray(program_desc_);
   }
 
 #ifdef LITE_WITH_METAL
@@ -254,6 +252,9 @@ class LITE_API Predictor {
 
   void ClearTensorArray(
       const std::shared_ptr<const cpp::ProgramDesc>& program_desc);
+#ifdef ENABLE_ARM_FP16
+  void WeightFP32ToFP16();
+#endif
 
  private:
   std::shared_ptr<cpp::ProgramDesc> program_desc_;

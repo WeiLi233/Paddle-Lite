@@ -128,7 +128,7 @@ class SplitTester : public arena::TestCase {
     }
   }
 
-  void PrepareOpDesc(cpp::OpDesc* op_desc) {
+  void PrepareOpDesc(cpp::OpDesc* op_desc) override {
     op_desc->SetType("split");
     op_desc->SetInput("X", {x_});
     if (!axis_tensor_.empty()) {
@@ -296,6 +296,14 @@ TEST(Split_test, precision) {
   TestSplitSectionsTensorList(place, abs_error);
 #elif defined(NNADAPTER_WITH_CAMBRICON_MLU)
   abs_error = 1e-5;
+  TestSplitBase<float>(place, abs_error);
+  TestSplitAxis(place, abs_error);
+  TestSplitNum(place, abs_error);
+  TestSplitSections(place, abs_error);
+  TestSplitAxisTensor(place, abs_error);
+  TestSplitSectionsTensorList(place, abs_error);
+#elif defined(NNADAPTER_WITH_QUALCOMM_QNN)
+  abs_error = 1e-2;
   TestSplitBase<float>(place, abs_error);
   TestSplitAxis(place, abs_error);
   TestSplitNum(place, abs_error);

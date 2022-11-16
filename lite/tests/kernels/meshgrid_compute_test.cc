@@ -112,7 +112,7 @@ class MeshgridComputeTester : public arena::TestCase {
     }
   }
 
-  void PrepareOpDesc(cpp::OpDesc* op_desc) {
+  void PrepareOpDesc(cpp::OpDesc* op_desc) override {
     op_desc->SetType("meshgrid");
     op_desc->SetInput("X", x_name_);
     op_desc->SetOutput("Out", outs_name_);
@@ -149,6 +149,8 @@ TEST(meshgrid, precision) {
 #else
   return;
 #endif
+#elif defined(LITE_WITH_XPU)
+  place = TARGET(kXPU);
 #elif defined(LITE_WITH_ARM) || defined(LITE_WITH_X86)
   place = TARGET(kHost);
 #else

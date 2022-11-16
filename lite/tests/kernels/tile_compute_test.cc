@@ -116,7 +116,7 @@ class TileComputeTester : public arena::TestCase {
     out->CopyDataFrom(tmp_dst_tensor);
   }
 
-  void PrepareOpDesc(cpp::OpDesc* op_desc) {
+  void PrepareOpDesc(cpp::OpDesc* op_desc) override {
     op_desc->SetType("tile");
     op_desc->SetInput("X", {x_});
     if (!repeat_times_tensor_.empty()) {
@@ -194,6 +194,9 @@ TEST(tile, precision) {
   TestTile<float>(place, alias, abs_error, {2, 1, 4}, {2, 3, 4}, true);
   return;
 #elif defined(NNADAPTER_WITH_HUAWEI_KIRIN_NPU)
+  abs_error = 1e-2;
+  alias = "def";
+#elif defined(NNADAPTER_WITH_QUALCOMM_QNN)
   abs_error = 1e-2;
   alias = "def";
 #else
