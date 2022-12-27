@@ -23,19 +23,19 @@ namespace xpu {
 void FusionDecodingCompute::PrepareForRun() {
   auto& param = Param<operators::FusionDecodingParam>();
   auto& ctx = this->ctx_->template As<XPUContext>();
-  #define ASSIGN_PARAM_1(name, type) name = xft::xftTensor<type, 1>(const_cast<type*>(param.name->template data<type>()), std::array<int64_t, 1>{param.name->dims()[0]});
-  #define ASSIGN_PARAM_2(name, type) name = xft::xftTensor<type, 2>(const_cast<type*>(param.name->template data<type>()), std::array<int64_t, 2>{param.name->dims()[0], param.name->dims()[1]});
+  #define ASSIGN_PARAM_VEC(name, type) name = xft::xftVec<type>(const_cast<type*>(param.name->template data<type>()), std::array<int64_t, 1>{param.name->dims()[0]});
+  #define ASSIGN_PARAM_MAT(name, type) name = xft::xftMat<type>(const_cast<type*>(param.name->template data<type>()), std::array<int64_t, 2>{param.name->dims()[0], param.name->dims()[1]});
 
-  #define QUANT_PARAM_2(name, type1, type2, need_transpose)  \
+  #define QUANT_PARAM_MAT(name, type1, type2, need_transpose)  \
   name = xft::quant_weight_from_xpu<type1, type2>(ctx.GetRawContext(), \
             param.name->template data<type1>(), std::array<int64_t, 2>{param.name->dims()[0], param.name->dims()[1]}, need_transpose);
 
-  #define ASSIGN_PARAM_LIST_1(name, type) \
+  #define ASSIGN_PARAM_LIST_VEC(name, type) \
   for (auto i = 0; i < param.name.size(); i++) { \
-      name.emplace_back(xft::xftTensor<type, 1>(const_cast<type*>(param.name[i]->template data<type>()), std::array<int64_t, 1>{param.name[i]->dims()[0]})); \
+      name.emplace_back(xft::xftVec<type>(const_cast<type*>(param.name[i]->template data<type>()), std::array<int64_t, 1>{param.name[i]->dims()[0]})); \
   }
 
-  #define QUANT_PARAM_LIST_2(name, type1, type2, need_transpose) \
+  #define QUANT_PARAM_LIST_MAT(name, type1, type2, need_transpose) \
   for (auto i = 0; i < param.name.size(); i++) { \
       auto tmp = xft::quant_weight_from_xpu<type1, type2>(ctx.GetRawContext(), \
             param.name[i]->template data<type1>(), std::array<int64_t, 2>{param.name[i]->dims()[0], param.name[i]->dims()[1]}, need_transpose); \
@@ -44,38 +44,38 @@ void FusionDecodingCompute::PrepareForRun() {
 
   #define ASSIGN_FDPARAM(name) fd_param.name = param.name;
 
-  ASSIGN_PARAM_2(word_embedding, float);
-  ASSIGN_PARAM_2(position_embedding, float);
-  ASSIGN_PARAM_LIST_1(self_ln_weight, float);
-  ASSIGN_PARAM_LIST_1(self_ln_bias, float);
-  QUANT_PARAM_LIST_2(self_q_weight, float, int16_t, true);
-  ASSIGN_PARAM_LIST_1(self_q_bias, float);
-  QUANT_PARAM_LIST_2(self_k_weight, float, int16_t, true);
-  ASSIGN_PARAM_LIST_1(self_k_bias, float);
-  QUANT_PARAM_LIST_2(self_v_weight, float, int16_t, true);
-  ASSIGN_PARAM_LIST_1(self_v_bias, float);
-  QUANT_PARAM_LIST_2(self_out_weight, float, int16_t, true);
-  ASSIGN_PARAM_LIST_1(self_out_bias, float);
-  ASSIGN_PARAM_LIST_1(cross_ln_weight, float);
-  ASSIGN_PARAM_LIST_1(cross_ln_bias, float);
-  QUANT_PARAM_LIST_2(cross_q_weight, float, int16_t, true);
-  ASSIGN_PARAM_LIST_1(cross_q_bias, float);
-  QUANT_PARAM_LIST_2(cross_k_weight, float, int16_t, true);
-  ASSIGN_PARAM_LIST_1(cross_k_bias, float);
-  QUANT_PARAM_LIST_2(cross_v_weight, float, int16_t, true);
-  ASSIGN_PARAM_LIST_1(cross_v_bias, float);
-  QUANT_PARAM_LIST_2(cross_out_weight, float, int16_t, true);
-  ASSIGN_PARAM_LIST_1(cross_out_bias, float);
-  ASSIGN_PARAM_LIST_1(ffn_ln_weight, float);
-  ASSIGN_PARAM_LIST_1(ffn_ln_bias, float);
-  QUANT_PARAM_LIST_2(ffn_inter_weight, float, int16_t, true);
-  ASSIGN_PARAM_LIST_1(ffn_inter_bias, float);
-  QUANT_PARAM_LIST_2(ffn_out_weight, float, int16_t, true);
-  ASSIGN_PARAM_LIST_1(ffn_out_bias, float);
-  ASSIGN_PARAM_1(decoder_ln_weight, float);
-  ASSIGN_PARAM_1(decoder_ln_bias, float);
-  QUANT_PARAM_2(emb_weight, float, int16_t, true);
-  ASSIGN_PARAM_1(emb_bias, float);
+  ASSIGN_PARAM_MAT(word_embedding, float);
+  ASSIGN_PARAM_MAT(position_embedding, float);
+  ASSIGN_PARAM_LIST_VEC(self_ln_weight, float);
+  ASSIGN_PARAM_LIST_VEC(self_ln_bias, float);
+  QUANT_PARAM_LIST_MAT(self_q_weight, float, int16_t, true);
+  ASSIGN_PARAM_LIST_VEC(self_q_bias, float);
+  QUANT_PARAM_LIST_MAT(self_k_weight, float, int16_t, true);
+  ASSIGN_PARAM_LIST_VEC(self_k_bias, float);
+  QUANT_PARAM_LIST_MAT(self_v_weight, float, int16_t, true);
+  ASSIGN_PARAM_LIST_VEC(self_v_bias, float);
+  QUANT_PARAM_LIST_MAT(self_out_weight, float, int16_t, true);
+  ASSIGN_PARAM_LIST_VEC(self_out_bias, float);
+  ASSIGN_PARAM_LIST_VEC(cross_ln_weight, float);
+  ASSIGN_PARAM_LIST_VEC(cross_ln_bias, float);
+  QUANT_PARAM_LIST_MAT(cross_q_weight, float, int16_t, true);
+  ASSIGN_PARAM_LIST_VEC(cross_q_bias, float);
+  QUANT_PARAM_LIST_MAT(cross_k_weight, float, int16_t, true);
+  ASSIGN_PARAM_LIST_VEC(cross_k_bias, float);
+  QUANT_PARAM_LIST_MAT(cross_v_weight, float, int16_t, true);
+  ASSIGN_PARAM_LIST_VEC(cross_v_bias, float);
+  QUANT_PARAM_LIST_MAT(cross_out_weight, float, int16_t, true);
+  ASSIGN_PARAM_LIST_VEC(cross_out_bias, float);
+  ASSIGN_PARAM_LIST_VEC(ffn_ln_weight, float);
+  ASSIGN_PARAM_LIST_VEC(ffn_ln_bias, float);
+  QUANT_PARAM_LIST_MAT(ffn_inter_weight, float, int16_t, true);
+  ASSIGN_PARAM_LIST_VEC(ffn_inter_bias, float);
+  QUANT_PARAM_LIST_MAT(ffn_out_weight, float, int16_t, true);
+  ASSIGN_PARAM_LIST_VEC(ffn_out_bias, float);
+  ASSIGN_PARAM_VEC(decoder_ln_weight, float);
+  ASSIGN_PARAM_VEC(decoder_ln_bias, float);
+  QUANT_PARAM_MAT(emb_weight, float, int16_t, true);
+  ASSIGN_PARAM_VEC(emb_bias, float);
 
   ASSIGN_FDPARAM(alpha);
   ASSIGN_FDPARAM(beam_search_diversity_rate);
@@ -97,10 +97,10 @@ void FusionDecodingCompute::Run() {
   auto& param = Param<operators::FusionDecodingParam>();
   auto& ctx = this->ctx_->template As<XPUContext>();
   auto Input = xft::xftTensor<float, 3>(const_cast<float*>(param.Input->template data<float>()), std::array<int64_t, 3>{param.Input->dims()[0], param.Input->dims()[1], param.Input->dims()[2]});
-  auto Memseqlen = xft::xftTensor<int32_t, 1>(const_cast<int32_t*>(param.Memseqlen->template data<int32_t>()), std::array<int64_t, 1>{param.Memseqlen->dims()[0]});
+  auto Memseqlen = xft::xftVec<int32_t>(const_cast<int32_t*>(param.Memseqlen->template data<int32_t>()), std::array<int64_t, 1>{param.Memseqlen->dims()[0]});
   auto OutIds = xft::xftTensor<int32_t, 3>(param.OutIds->template mutable_data<int32_t>(TARGET(kXPU)), std::array<int64_t, 3>{param.OutIds->dims()[0], param.OutIds->dims()[1], param.OutIds->dims()[2]});
   auto ParentIds = xft::xftTensor<int32_t, 3>(param.ParentIds->template mutable_data<int32_t>(TARGET(kXPU)), std::array<int64_t, 3>{param.ParentIds->dims()[0], param.ParentIds->dims()[1], param.ParentIds->dims()[2]});
-  auto SequenceLength = xft::xftTensor<int32_t, 1>(param.SequenceLength->template mutable_data<int32_t>(TARGET(kXPU)), std::array<int64_t, 1>{param.SequenceLength->dims()[0]});
+  auto SequenceLength = xft::xftVec<int32_t>(param.SequenceLength->template mutable_data<int32_t>(TARGET(kXPU)), std::array<int64_t, 1>{param.SequenceLength->dims()[0]});
   int r = xft::fusion_decoding<float, int16_t, int16_t>(
             ctx.GetRawContext(), 
             Input, Memseqlen,
@@ -132,119 +132,119 @@ void FusionDecodingCompute::Run() {
 
 REGISTER_LITE_KERNEL(fusion_decoding,
                      kXPU,
-                     kAny,
+                     kFloat,
                      kAny,
                      paddle::lite::kernels::xpu::FusionDecodingCompute,
                      def)
     .BindInput("Input",
                {LiteType::GetTensorTy(
-                   TARGET(kXPU), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("MemSeqLen",
                {LiteType::GetTensorTy(
-                   TARGET(kXPU), PRECISION(kInt32), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kInt32))})
     .BindInput("WordEmbedding",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfLayernormWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfLayernormBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfQueryWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfQueryBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfKeyWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfKeyBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfValueWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfValueBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfOutWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("SelfOutBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("CrossLayernormWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("CrossLayernormBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("CrossQueryWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("CrossQueryBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("CrossKeyWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("CrossKeyBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("CrossValueWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("CrossValueBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("CrossOutWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("CrossOutBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("FFNLayernormWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("FFNLayernormBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("FFNInterWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("FFNInterBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("FFNOutWeight@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("FFNOutBias@VECTOR",
                {LiteType::GetTensorTy(
-                   TARGET(kHost), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("DecoderLayernormWeight",
                {LiteType::GetTensorTy(
-                   TARGET(kXPU), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("DecoderLayernormBias",
                {LiteType::GetTensorTy(
-                   TARGET(kXPU), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("EmbWeight",
                {LiteType::GetTensorTy(
-                   TARGET(kXPU), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("EmbBias",
                {LiteType::GetTensorTy(
-                   TARGET(kXPU), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindInput("PositionEncEmb",
                {LiteType::GetTensorTy(
-                   TARGET(kXPU), PRECISION(kFloat), DATALAYOUT(kAny), -1)})
+                   TARGET(kXPU), PRECISION(kFloat))})
     .BindOutput("OutputIds",
                 {LiteType::GetTensorTy(
-                    TARGET(kXPU), PRECISION(kInt32), DATALAYOUT(kAny), -1)})
+                    TARGET(kXPU), PRECISION(kInt32))})
     .BindOutput("ParentIds",
                 {LiteType::GetTensorTy(
-                    TARGET(kXPU), PRECISION(kInt32), DATALAYOUT(kAny), -1)})
+                    TARGET(kXPU), PRECISION(kInt32))})
     .BindOutput("SequenceLength",
                 {LiteType::GetTensorTy(
-                    TARGET(kXPU), PRECISION(kInt32), DATALAYOUT(kAny), -1)})
+                    TARGET(kXPU), PRECISION(kInt32))})
     .Finalize();
