@@ -78,6 +78,7 @@ KUNLUNXIN_XPU_XDNN_URL=""
 KUNLUNXIN_XPU_XRE_URL=""
 KUNLUNXIN_XPU_SDK_ENV=""
 KUNLUNXIN_XPU_SDK_ROOT=""
+KUNLUNXIN_XFT_SDK_ROOT=""
 # options of adding training ops
 WITH_TRAIN=OFF
 # options of building tiny publish so
@@ -91,7 +92,7 @@ WITH_PRECISION_PROFILE=OFF
 # option of benchmark, default is OFF
 WITH_BENCHMARK=OFF
 # num of threads used during compiling..
-readonly NUM_PROC=${LITE_BUILD_THREADS:-4}
+readonly NUM_PROC=${LITE_BUILD_THREADS:-120}
 #####################################################################################################
 
 
@@ -105,7 +106,7 @@ readonly THIRDPARTY_TAR=third-party-651c7c4.tar.gz
 # absolute path of Paddle-Lite.
 readonly workspace=$(dirname $(readlink -f "$0"))/../../
 # basic options for linux compiling.
-readonly CMAKE_COMMON_OPTIONS="-DCMAKE_BUILD_TYPE=Release \
+readonly CMAKE_COMMON_OPTIONS="-DCMAKE_BUILD_TYPE=RelWithDebInfo \
                             -DWITH_MKLDNN=OFF \
                             -DWITH_TESTING=OFF"
 
@@ -200,6 +201,7 @@ function init_cmake_mutable_options {
                         -DXPU_XRE_URL=$KUNLUNXIN_XPU_XRE_URL \
                         -DXPU_SDK_ENV=$KUNLUNXIN_XPU_SDK_ENV \
                         -DXPU_SDK_ROOT=$KUNLUNXIN_XPU_SDK_ROOT \
+                        -DXPU_XFT_ROOT=$KUNLUNXIN_XPU_XFT_ROOT \
                         -DLITE_WITH_TRAIN=$WITH_TRAIN  \
                         -DLITE_WITH_NNADAPTER=$WITH_NNADAPTER \
                         -DNNADAPTER_WITH_ROCKCHIP_NPU=$NNADAPTER_WITH_ROCKCHIP_NPU \
@@ -727,6 +729,10 @@ function main {
                 if [ -n "${KUNLUNXIN_XPU_SDK_ROOT}" ]; then
                     KUNLUNXIN_XPU_SDK_ROOT=$(readlink -f ${KUNLUNXIN_XPU_SDK_ROOT})
                 fi
+                shift
+                ;;
+            --kunlunxin_xpu_xft_root=*)
+              KUNLUNXIN_XPU_XFT_ROOT="${i#*=}"
                 shift
                 ;;
             # controls whether to include FP16 kernels, default is OFF

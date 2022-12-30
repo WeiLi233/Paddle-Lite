@@ -29,6 +29,10 @@ int FillConstantCompute::FillConstData() {
   auto& param = this->template Param<param_t>();
   auto& ctx = this->ctx_->template As<XPUContext>();
   int write_size = param.out->numel();
+  if(write_size == 0) {
+      LOG(INFO) << "fill constant size is 0.";
+      return 0;
+  }
 
   T value = static_cast<T>(param.value);
   if (param.value_tensor) {

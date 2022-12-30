@@ -73,10 +73,19 @@ macro (prepare_xpu_sdk sdk sdk_url)
 endmacro ()
 
 if (NOT XPU_SDK_ROOT)
+  # add by liwei127
+  if(NOT "${XPU_XFT_ROOT}" STREQUAL "")
+    set (XFT_INCLUDE_DIR  "${XPU_XFT_ROOT}/include" CACHE PATH "xpu xft include directory" FORCE)
+    set (XFT_LIB          "${XPU_XFT_ROOT}/so/libxft.so" CACHE FILEPATH "libxft.so" FORCE)
+    include_directories(${XFT_INCLUDE_DIR})
+    link_libraries(${XFT_LIB})
+  endif()
+
   prepare_xpu_sdk (xdnn ${XPU_XDNN_URL} xpuapi)
   prepare_xpu_sdk (xre ${XPU_XRE_URL} xpurt)
   set (xpu_builder_libs xpuapi CACHE INTERNAL "xpu builder libs")
   set (xpu_runtime_libs xpurt CACHE INTERNAL "xpu runtime libs")
+
   return ()
 endif ()
 
@@ -111,3 +120,4 @@ set_property (TARGET xpurt PROPERTY IMPORTED_LOCATION ${XPURT_LIB})
 
 set (xpu_runtime_libs xpuapi xpurt CACHE INTERNAL "xpu runtime libs")
 set (xpu_builder_libs xpuapi xpurt CACHE INTERNAL "xpu builder libs")
+

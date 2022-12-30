@@ -90,6 +90,7 @@ void FusionDecodingCompute::PrepareForRun() {
   ASSIGN_FDPARAM(size_per_head);
   ASSIGN_FDPARAM(topk);
   ASSIGN_FDPARAM(topp);
+  // ASSIGN_FDPARAM(keep_alive_beam);
   return;
 }
 
