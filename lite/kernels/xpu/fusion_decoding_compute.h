@@ -15,7 +15,7 @@
 #pragma once
 #include "lite/core/kernel.h"
 #include "lite/core/op_registry.h"
-#include "ft_ops/fusion_decoding_op.h"
+#include "models/fusion_decoding_op.h"
 
 namespace paddle {
 namespace lite {

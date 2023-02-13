@@ -17,7 +17,7 @@
 // #include "lite/api/paddle_place.h"
 #include "lite/backends/xpu/target_wrapper.h"  // XPUScratchPadGuard
 #include "lite/core/kernel.h"
-#include "ft_ops/fusion_unified_decoding_op.h"
+#include "models/fusion_unified_decoding_op.h"
 
 namespace paddle {
 namespace lite {

@@ -193,7 +193,8 @@ void FusionUnifiedDecodingCompute::Run() {
       lm_ln_weight_, lm_ln_bias_,
       emb_weight_, emb_bias_,
       &output_ids,  &output_seq_len, &output_scores, fud_param_);
-
+  CHECK_EQ(ret, 0);
+  
   return;
 }
 
