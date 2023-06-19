@@ -427,9 +427,11 @@ void matmulv2_add_n_scale_bias(float* o_data, float* scale, int m, int n) {
                                      o_data + i * out_inner,               \
                                      nullptr,                              \
                                      false,                                \
+                                     lite::arm::math::GemmNoBias,          \
                                      scale_one.data(),                     \
                                      act_param,                            \
-                                     &ctx);                                \
+                                     &ctx,                                 \
+                                     false);                               \
         matmulv2_add_n_scale_bias(                                         \
             o_data + i * out_inner, scale_.data(), m_, n_);                \
       }                                                                    \
@@ -445,9 +447,11 @@ void matmulv2_add_n_scale_bias(float* o_data, float* scale, int m, int n) {
                                      o_data + i * out_inner,               \
                                      nullptr,                              \
                                      false,                                \
+                                     lite::arm::math::GemmNoBias,          \
                                      scale_one.data(),                     \
                                      act_param,                            \
-                                     &ctx);                                \
+                                     &ctx,                                 \
+                                     false);                               \
         matmulv2_add_n_scale_bias(                                         \
             o_data + i * out_inner, scale_.data(), m_, n_);                \
       }                                                                    \
@@ -463,9 +467,11 @@ void matmulv2_add_n_scale_bias(float* o_data, float* scale, int m, int n) {
                                      o_data + i * out_inner,               \
                                      nullptr,                              \
                                      false,                                \
+                                     lite::arm::math::GemmNoBias,          \
                                      scale_one.data(),                     \
                                      act_param,                            \
-                                     &ctx);                                \
+                                     &ctx,                                 \
+                                     false);                               \
         matmulv2_add_n_scale_bias(                                         \
             o_data + i * out_inner, scale_.data(), m_, n_);                \
       }                                                                    \
@@ -481,9 +487,11 @@ void matmulv2_add_n_scale_bias(float* o_data, float* scale, int m, int n) {
                                  o_data,                                   \
                                  nullptr,                                  \
                                  false,                                    \
+                                 lite::arm::math::GemmNoBias,              \
                                  scale_one.data(),                         \
                                  act_param,                                \
-                                 &ctx);                                    \
+                                 &ctx,                                     \
+                                 false);                                   \
     matmulv2_add_n_scale_bias(o_data, scale_.data(), m_, n_);              \
   } else if (x_dims.size() >= 2 && y_dims.size() == 1) {                   \
     lite::arm::math::gemm_##func(x_transpose,                              \
@@ -496,9 +504,11 @@ void matmulv2_add_n_scale_bias(float* o_data, float* scale, int m, int n) {
                                  o_data,                                   \
                                  nullptr,                                  \
                                  false,                                    \
+                                 lite::arm::math::GemmNoBias,              \
                                  scale_one.data(),                         \
                                  act_param,                                \
-                                 &ctx);                                    \
+                                 &ctx,                                     \
+                                 false);                                   \
     matmulv2_add_n_scale_bias(o_data, scale_.data(), m_, n_);              \
   } else if (y_dims.size() >= 2 && x_dims.size() == 1) {                   \
     lite::arm::math::gemm_##func(false,                                    \
@@ -511,9 +521,11 @@ void matmulv2_add_n_scale_bias(float* o_data, float* scale, int m, int n) {
                                  o_data,                                   \
                                  nullptr,                                  \
                                  false,                                    \
+                                 lite::arm::math::GemmNoBias,              \
                                  scale_one.data(),                         \
                                  act_param,                                \
-                                 &ctx);                                    \
+                                 &ctx,                                     \
+                                 false);                                   \
     matmulv2_add_n_scale_bias(o_data, scale_.data(), m_, n_);              \
   } else if (x_dims.size() == 1 && y_dims.size() == 1) {                   \
     if (x_transpose == false && y_transpose == false) {                    \
@@ -532,9 +544,11 @@ void matmulv2_add_n_scale_bias(float* o_data, float* scale, int m, int n) {
                                    o_data,                                 \
                                    nullptr,                                \
                                    false,                                  \
+                                   lite::arm::math::GemmNoBias,            \
                                    scale_one.data(),                       \
                                    act_param,                              \
-                                   &ctx);                                  \
+                                   &ctx,                                   \
+                                   false);                                 \
     } else {                                                               \
       LOG(FATAL) << "not supported x_dims.(" << x_dims << ") and y_dims("  \
                  << y_dims << ")"                                          \

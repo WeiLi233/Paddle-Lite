@@ -33,9 +33,11 @@ void gemm_s8(bool is_transA,
              Dtype* C,
              const float* bias,
              bool is_bias,
+             GemmBiasDirection bias_direction,
              const float* scale,
              const operators::ActivationParam act_param,
-             ARMContext* ctx) {
+             ARMContext* ctx,
+             bool packed_b) {
   if (N == 1) {
     gemv_int8(A, B, C, is_transA, M, K, scale, is_bias, bias, act_param, ctx);
 
@@ -83,8 +85,20 @@ void gemm_s8(bool is_transA,
   int lda = is_transA ? M : K;
   prepackA_int8(packed_A, A, lda, 0, M, 0, K, is_transA, ctx);
 
-  gemm_prepack_int8<Dtype>(
-      packed_A, B, bias, C, M, N, K, is_bias, is_transB, scale, act_param, ctx);
+  gemm_prepack_int8<Dtype>(packed_A,
+                           B,
+                           bias,
+                           C,
+                           M,
+                           N,
+                           K,
+                           is_bias,
+                           bias_direction,
+                           is_transB,
+                           scale,
+                           act_param,
+                           ctx,
+                           packed_b);
 }
 
 template void gemm_s8<float>(bool is_transA,
@@ -97,9 +111,11 @@ template void gemm_s8<float>(bool is_transA,
                              float* C,
                              const float* bias,
                              bool is_bias,
+                             GemmBiasDirection bias_direction,
                              const float* scale,
                              const operators::ActivationParam act_param,
-                             ARMContext* ctx);
+                             ARMContext* ctx,
+                             bool packed_b);
 
 template void gemm_s8<int8_t>(bool is_transA,
                               bool is_transB,
@@ -111,9 +127,11 @@ template void gemm_s8<int8_t>(bool is_transA,
                               int8_t* C,
                               const float* bias,
                               bool is_bias,
+                              GemmBiasDirection bias_direction,
                               const float* scale,
                               const operators::ActivationParam act_param,
-                              ARMContext* ctx);
+                              ARMContext* ctx,
+                              bool packed_b);
 
 #if defined(__aarch64__) && defined(LITE_WITH_ARM8_SVE2)
 template <typename Dtype>
@@ -127,9 +145,11 @@ void gemm_sve(bool is_transA,
               Dtype* C,
               const float* bias,
               bool is_bias,
+              GemmBiasDirection bias_direction,
               const float* scale,
               const operators::ActivationParam act_param,
-              ARMContext* ctx) {
+              ARMContext* ctx,
+              bool packed_b) {
   if (N == 1) {
     gemv_int8(A, B, C, is_transA, M, K, scale, is_bias, bias, act_param, ctx);
     return;
@@ -190,7 +210,8 @@ void gemm_sve(bool is_transA,
       is_transB,
       scale,
       act_param,
-      ctx);
+      ctx,
+      false);
 }
 
 template void gemm_sve<float>(bool is_transA,
@@ -203,9 +224,11 @@ template void gemm_sve<float>(bool is_transA,
                               float* C,
                               const float* bias,
                               bool is_bias,
+                              GemmBiasDirection bias_direction,
                               const float* scale,
                               const operators::ActivationParam act_param,
-                              ARMContext* ctx);
+                              ARMContext* ctx,
+                              bool packed_b);
 
 template void gemm_sve<int8_t>(bool is_transA,
                                bool is_transB,
@@ -217,9 +240,11 @@ template void gemm_sve<int8_t>(bool is_transA,
                                int8_t* C,
                                const float* bias,
                                bool is_bias,
+                               GemmBiasDirection bias_direction,
                                const float* scale,
                                const operators::ActivationParam act_param,
-                               ARMContext* ctx);
+                               ARMContext* ctx,
+                               bool packed_b);
 #endif
 
 }  // namespace math

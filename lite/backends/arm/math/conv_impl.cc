@@ -738,7 +738,8 @@ void conv1x1s1_gemm_int8(const int8_t* i_data,
                                      false,
                                      scale_group,
                                      act_param,
-                                     ctx);
+                                     ctx,
+                                     false);
         } else {
 #endif
           gemm_prepack_int8(weights_group,
@@ -749,10 +750,12 @@ void conv1x1s1_gemm_int8(const int8_t* i_data,
                             n,
                             k,
                             flag_bias,
+                            GemmMBias,
                             false,
                             scale_group,
                             act_param,
-                            ctx);
+                            ctx,
+                            false);
 #if defined(__aarch64__) && defined(LITE_WITH_ARM8_SVE2)
         }
 #endif
@@ -1606,7 +1609,8 @@ void conv_im2col_gemm_int8(const int8_t* i_data,
                                      false,
                                      scale_group,
                                      act_param,
-                                     ctx);
+                                     ctx,
+                                     false);
         } else {
 #endif
           gemm_prepack_int8(weights_group,
@@ -1617,10 +1621,12 @@ void conv_im2col_gemm_int8(const int8_t* i_data,
                             n,
                             k,
                             flag_bias,
+                            GemmMBias,
                             false,
                             scale_group,
                             act_param,
-                            ctx);
+                            ctx,
+                            false);
 #if defined(__aarch64__) && defined(LITE_WITH_ARM8_SVE2)
         }
 #endif

@@ -144,7 +144,8 @@ enum class ActivationType : int {
   kSoftPlus = 21,
   kMish = 22,
   kSilu = 23,
-  NUM = 24,
+  kLog1p = 24,
+  NUM = 25,
 };
 
 static size_t PrecisionTypeLength(PrecisionType type) {
@@ -282,6 +283,11 @@ struct LITE_API Place {
   friend bool operator<(const Place& a, const Place& b);
 
   std::string DebugString() const;
+};
+
+struct LITE_API CustomAllocator {
+  void* (*alloc)(size_t size, size_t alignment) = nullptr;
+  void (*free)(void* ptr) = nullptr;
 };
 
 }  // namespace lite_api

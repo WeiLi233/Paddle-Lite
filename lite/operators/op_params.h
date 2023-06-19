@@ -117,6 +117,36 @@ struct FcParam : ParamBase {
   WITH_INT8_CONFIG
 };
 
+struct FusedAttentionParam : ParamBase {
+  lite::Tensor* input{nullptr};
+  lite::Tensor* residual{nullptr};
+  lite::Tensor* fc_w{nullptr};
+  lite::Tensor* fc_bias{nullptr};
+  lite::Tensor* output{nullptr};
+
+  bool padding_weights{false};
+  std::vector<int> reshape_shape{};
+  int softmax_axis{-1};
+
+  // fc
+  std::string activation_type{""};
+  float alpha{6.f};
+  std::string op_type{"mul"};
+  int in_num_col_dims{1};
+
+  // for int8
+  bool enable_int8{false};
+  std::vector<float> calib0_scale{};
+  std::vector<float> calib1_scale{};
+  std::vector<float> fc0_scale{};
+  std::vector<float> fc1_scale{};
+  std::vector<float> fc2_scale{};
+  int bit_length{8};
+
+  // for float/fp16
+  float scale{1.f};
+};
+
 struct SearchSeqFcParam : ParamBase {
   lite::Tensor* x{nullptr};
   lite::Tensor* w{nullptr};
@@ -142,6 +172,7 @@ struct InterpolateParam : ParamBase {
   bool version_2{false};
   std::string interp_method{"Nearest"};
   DataLayoutType data_layout{DATALAYOUT(kNCHW)};
+  WITH_INT8_CONFIG
 };
 
 // For Mul Op
@@ -1217,6 +1248,8 @@ struct ReduceParam : ParamBase {
   std::vector<int> dim{0};
   bool keep_dim{false};
   bool reduce_all{false};
+  // for int8
+  WITH_INT8_CONFIG
 };
 
 struct VarConv2DParam : ParamBase {
@@ -1727,9 +1760,10 @@ struct XPUBlockFuseParam : ParamBase {
   bool enable_int8{false};
   bool enable_int16{false};
   float quant_input_max{0.f};
-  float quant_w_max{0.f};
+  std::vector<float> quant_w_max{0.f};
   float quant_output_max{0.f};
   float quant_branch_max{0.f};
+  bool per_channel{false};
 };
 
 struct XPUMultiEncoderParam : ParamBase {
@@ -1765,6 +1799,215 @@ struct XPUMultiEncoderParam : ParamBase {
   bool adaptive_seqlen{false};
   bool per_channel{false};
   bool already_qkv_fusion{false};  // qkv is already fusion in graph
+};
+
+struct XPUSpatialTransformerResBlockParam : ParamBase {
+  const lite::Tensor* input1{};
+  const lite::Tensor* input2{nullptr};
+  std::vector<lite::Tensor*> fc_weight;
+  std::vector<lite::Tensor*> fc_bias;
+  std::vector<lite::Tensor*> conv_filter;
+  std::vector<lite::Tensor*> conv_bias;
+  std::vector<lite::Tensor*> gn_scale;
+  std::vector<lite::Tensor*> gn_bias;
+  std::vector<lite::Tensor*> input_max;
+  lite::Tensor* output{nullptr};
+  std::vector<lite::Tensor*> weight_max{};
+  std::vector<lite::Tensor*> filter_max{};
+  std::vector<int> groups{};
+  std::vector<std::vector<int>> strides{};
+  std::vector<std::vector<int>> paddings{};
+  std::vector<std::vector<int>> dilations{};
+  std::vector<std::vector<int>> filter_dims{};
+  std::vector<int> gn_groups{};
+  std::vector<float> gn_eps{};
+  bool conv_fix{};
+  bool has_silu_fc_input{true};
+};
+
+struct XPUUpDecoderParam : ParamBase {
+  const lite::Tensor* input1{};
+  std::vector<lite::Tensor*> resblock_conv_filter;
+  std::vector<lite::Tensor*> resblock_conv_bias;
+  std::vector<lite::Tensor*> resblock_gn_scale;
+  std::vector<lite::Tensor*> resblock_gn_bias;
+  std::vector<lite::Tensor*> resblock_conv_input_max;
+  lite::Tensor* post_conv_filter{nullptr};
+  lite::Tensor* post_conv_bias{nullptr};
+  lite::Tensor* post_conv_input_max{nullptr};
+  lite::Tensor* output{nullptr};
+  std::vector<lite::Tensor*> resblock_filter_max{};
+  std::vector<lite::Tensor*> post_filter_max{};
+  // Multi resblock attrs
+  std::vector<int> resblock_conv_fix;
+  std::vector<std::vector<int>> resblock_conv_groups;
+  std::vector<std::vector<std::vector<int>>> resblock_conv_strides{};
+  std::vector<std::vector<std::vector<int>>> resblock_conv_paddings{};
+  std::vector<std::vector<std::vector<int>>> resblock_conv_dilations{};
+  std::vector<std::vector<std::vector<int>>> resblock_filter_dims{};
+  std::vector<std::vector<int>> resblock_gn_groups{};
+  std::vector<std::vector<float>> resblock_gn_eps{};
+  int num_inputs;
+  int num_resblocks;
+  // Post interp attrs
+  bool has_post_interp_conv{false};
+  bool interp_align_corners{false};
+  std::string interp_method{""};
+  int interp_out_d{0};
+  int interp_out_h{0};
+  int interp_out_w{0};
+  std::vector<float> interp_scale{};
+  // Post conv attrs
+  std::vector<int> post_conv_strides{};
+  std::vector<int> post_conv_paddings{};
+  std::vector<int> post_conv_dilations{};
+  std::vector<int> post_filter_dims{};
+  std::vector<int> post_conv_groups{};
+};
+
+struct XPUMultiUpDecoderParam : ParamBase {
+  const lite::Tensor* input1{};
+  std::vector<lite::Tensor*> all_resblock_conv_filter;
+  std::vector<lite::Tensor*> all_resblock_conv_bias;
+  std::vector<lite::Tensor*> all_resblock_conv_input_max;
+
+  std::vector<lite::Tensor*> all_resblock_gn_scale;
+  std::vector<lite::Tensor*> all_resblock_gn_bias;
+
+  std::vector<lite::Tensor*> all_post_conv_filter;
+  std::vector<lite::Tensor*> all_post_conv_bias;
+  std::vector<lite::Tensor*> all_post_conv_input_max;
+
+  lite::Tensor* output{nullptr};
+  std::vector<lite::Tensor*> all_resblock_filter_max{};
+  std::vector<lite::Tensor*> all_post_filter_max{};
+
+  lite::Tensor* last_gn_scale{nullptr};
+  lite::Tensor* last_gn_bias{nullptr};
+
+  // All resblock conv/group-norm attrs among different up-coders
+  std::vector<std::vector<int>> all_resblock_conv_fix;
+  std::vector<std::vector<std::vector<int>>> all_resblock_conv_groups;
+  std::vector<std::vector<std::vector<std::vector<int>>>>
+      all_resblock_conv_strides{};
+  std::vector<std::vector<std::vector<std::vector<int>>>>
+      all_resblock_conv_paddings{};
+  std::vector<std::vector<std::vector<std::vector<int>>>>
+      all_resblock_conv_dilations{};
+  std::vector<std::vector<std::vector<std::vector<int>>>>
+      all_resblock_filter_dims{};
+  std::vector<std::vector<std::vector<int>>> all_resblock_gn_groups{};
+  std::vector<std::vector<std::vector<float>>> all_resblock_gn_eps{};
+
+  // All post interp attrs
+  std::vector<int> has_post_interp;
+  std::vector<int> post_interp_align_corners;
+  std::vector<std::string> post_interp_method;
+  std::vector<std::vector<int>> post_interp_out_dhw;
+  std::vector<std::vector<float>> post_interp_scale;
+  // All post conv attrs
+  std::vector<std::vector<int>> all_post_conv_strides{};
+  std::vector<std::vector<int>> all_post_conv_paddings{};
+  std::vector<std::vector<int>> all_post_conv_dilations{};
+  std::vector<std::vector<int>> all_post_filter_dims{};
+  std::vector<int> all_post_conv_groups{};
+
+  // Last gn silu attrs
+  float last_gn_eps = 0.0;
+  int last_gn_groups = 0;
+
+  // Other info
+  std::vector<int> num_resblocks_per_up_decoder;
+  int num_up_decoders;
+  std::vector<int> resblock_start_idx;
+  std::vector<int> resblock_end_idx;
+  bool has_last_gn_silu{false};
+};
+
+struct XPUSpatialTransformerParam : ParamBase {
+  const lite::Tensor* input{};
+  const lite::Tensor* embedding{};
+  std::vector<lite::Tensor*> fc_weight;
+  std::vector<lite::Tensor*> fc_bias;
+  std::vector<lite::Tensor*> ln_scale;
+  std::vector<lite::Tensor*> ln_bias;
+  std::vector<lite::Tensor*> conv_weight;
+  std::vector<lite::Tensor*> conv_bias;
+  std::vector<lite::Tensor*> gn_scale;
+  std::vector<lite::Tensor*> gn_bias;
+  lite::Tensor* output{nullptr};
+  std::vector<lite::Tensor*> weight_max{};
+  std::vector<lite::Tensor*> conv_max{};
+  std::vector<int> conv_groups{};
+  std::vector<std::vector<int>> strides{};
+  std::vector<std::vector<int>> paddings{};
+  std::vector<std::vector<int>> dilations{};
+  std::vector<std::vector<int>> filter_dims{};
+  int head_num{};
+  int size_per_head{};
+  int hidden_dim{};
+  int embedding_dim{};
+  int geglu_dim{};
+  int groups{};
+  int epsilon{};
+};
+
+struct XPUGnSiluParam : ParamBase {
+  const lite::Tensor* input{};
+  std::vector<lite::Tensor*> gn_scale;
+  std::vector<lite::Tensor*> gn_bias;
+  lite::Tensor* output{nullptr};
+  int groups{};
+  float epsilon{};
+};
+
+struct XPUGegluParam : ParamBase {
+  const lite::Tensor* input{};
+  std::vector<lite::Tensor*> fc_weight;
+  std::vector<lite::Tensor*> fc_bias;
+  std::vector<lite::Tensor*> ln_scale;
+  std::vector<lite::Tensor*> ln_bias;
+  lite::Tensor* output{nullptr};
+  std::vector<lite::Tensor*> weight_max{};
+  int hidden_dim{};
+  int gelu_dim{};
+};
+
+struct XPUMhsaParam : ParamBase {
+  const lite::Tensor* input{};
+  std::vector<lite::Tensor*> fc_weight;
+  std::vector<lite::Tensor*> fc_bias;
+  std::vector<lite::Tensor*> ln_scale;
+  std::vector<lite::Tensor*> ln_bias;
+  lite::Tensor* output{nullptr};
+  std::vector<lite::Tensor*> weight_max{};
+  int head_num{};
+  int size_per_head{};
+  int hidden_dim{};
+};
+
+struct XPUMhcaParam : ParamBase {
+  const lite::Tensor* input{};
+  const lite::Tensor* embedding{};
+  std::vector<lite::Tensor*> fc_weight;
+  std::vector<lite::Tensor*> fc_bias;
+  std::vector<lite::Tensor*> ln_scale;
+  std::vector<lite::Tensor*> ln_bias;
+  lite::Tensor* output{nullptr};
+  std::vector<lite::Tensor*> weight_max{};
+  int head_num{};
+  int size_per_head{};
+  int hidden_dim{};
+  int embedding_dim{};
+};
+
+struct XpuMatmulScaleSoftmaxV1Param : ParamBase {
+  lite::Tensor* mat_q{nullptr};
+  lite::Tensor* mat_k{nullptr};
+  lite::Tensor* mat_v{nullptr};
+  lite::Tensor* output{nullptr};
+  float alpha{1};
+  std::vector<int> matmul_trans_info{0, 0, 0, 0};
 };
 
 struct XPUEmbeddingWithEltwiseAddParam : ParamBase {
@@ -1816,6 +2059,13 @@ struct XPURoformerRelativeEmbeddingParam : ParamBase {
   lite::Tensor* sin_embedding{nullptr};
   lite::Tensor* output{nullptr};
   int max_pos_len{512};
+};
+
+struct XPUMaskAdaptiveParam : ParamBase {
+  const lite::Tensor* Mask{nullptr};
+  lite::Tensor* SeqLod{nullptr};
+  lite::Tensor* PadSeqLen{nullptr};
+  lite::Tensor* Length{nullptr};
 };
 
 struct XPUResNetCbamParam : ParamBase {
@@ -2062,6 +2312,8 @@ struct ClipParam : ParamBase {
   Tensor* out{};
   float min{};
   float max{};
+  // for int8
+  WITH_INT8_CONFIG
 };
 
 struct PrintParam : ParamBase {
@@ -2328,6 +2580,14 @@ struct RollParam : ParamBase {
   std::vector<int64_t> axis{};
 };
 
+struct BitwiseParam : ParamBase {
+  const lite::Tensor* X{nullptr};
+  const lite::Tensor* Y{nullptr};
+  lite::Tensor* Out{nullptr};
+  std::string bitwise_type_;
+  int axis_{-1};
+};
+
 struct SetValueParam : ParamBase {
   const lite::Tensor* Input{};
   const lite::Tensor* ValueTensor{};
@@ -2358,6 +2618,156 @@ struct ShareDataParam : ParamBase {
 
 struct RoundParam : ParamBase {
   const lite::Tensor* X{};
+  lite::Tensor* Out{};
+};
+
+struct FusionDecodingParam : ParamBase {
+  const lite::Tensor* Input{};
+  const lite::Tensor* Memseqlen{};
+  const lite::Tensor* word_embedding{};
+  const lite::Tensor* position_embedding{};
+  std::vector<const lite::Tensor*> self_ln_weight{};
+  std::vector<const lite::Tensor*> self_ln_bias{};
+  std::vector<const lite::Tensor*> self_q_weight{};
+  std::vector<const lite::Tensor*> self_q_bias{};
+  std::vector<const lite::Tensor*> self_k_weight{};
+  std::vector<const lite::Tensor*> self_k_bias{};
+  std::vector<const lite::Tensor*> self_v_weight{};
+  std::vector<const lite::Tensor*> self_v_bias{};
+  std::vector<const lite::Tensor*> self_out_weight{};
+  std::vector<const lite::Tensor*> self_out_bias{};
+  std::vector<const lite::Tensor*> cross_ln_weight{};
+  std::vector<const lite::Tensor*> cross_ln_bias{};
+  std::vector<const lite::Tensor*> cross_q_weight{};
+  std::vector<const lite::Tensor*> cross_q_bias{};
+  std::vector<const lite::Tensor*> cross_k_weight{};
+  std::vector<const lite::Tensor*> cross_k_bias{};
+  std::vector<const lite::Tensor*> cross_v_weight{};
+  std::vector<const lite::Tensor*> cross_v_bias{};
+  std::vector<const lite::Tensor*> cross_out_weight{};
+  std::vector<const lite::Tensor*> cross_out_bias{};
+  std::vector<const lite::Tensor*> ffn_ln_weight{};
+  std::vector<const lite::Tensor*> ffn_ln_bias{};
+  std::vector<const lite::Tensor*> ffn_inter_weight{};
+  std::vector<const lite::Tensor*> ffn_inter_bias{};
+  std::vector<const lite::Tensor*> ffn_out_weight{};
+  std::vector<const lite::Tensor*> ffn_out_bias{};
+  const lite::Tensor* decoder_ln_weight{};
+  const lite::Tensor* decoder_ln_bias{};
+  const lite::Tensor* emb_weight{};
+  const lite::Tensor* emb_bias{};
+  lite::Tensor* OutIds{};
+  lite::Tensor* ParentIds{};
+  lite::Tensor* SequenceLength{};
+  float alpha;
+  float beam_search_diversity_rate;
+  int beam_size;
+  int bos_id;
+  std::string decoding_strategy;
+  int eos_id;
+  int64_t max_len;
+  int num_layer;
+  int n_head;
+  bool rel_len;
+  int size_per_head;
+  int topk;
+  float topp;
+};
+
+struct FusionUnifiedDecodingParam : ParamBase {
+  const lite::Tensor* input_ids_{};
+  const lite::Tensor* attn_mask_{};
+  const lite::Tensor* mem_seq_len_{};
+  const lite::Tensor* type_id_{};
+  const lite::Tensor* decoder_type_id_{};
+  const lite::Tensor* logits_mask_{};
+  const lite::Tensor* word_embedding_{};
+  std::vector<const lite::Tensor*> self_ln_weight_;
+  std::vector<const lite::Tensor*> self_ln_bias_;
+  std::vector<const lite::Tensor*> self_q_weight_;
+  std::vector<const lite::Tensor*> self_q_bias_;
+  std::vector<const lite::Tensor*> self_k_weight_;
+  std::vector<const lite::Tensor*> self_k_bias_;
+  std::vector<const lite::Tensor*> self_v_weight_;
+  std::vector<const lite::Tensor*> self_v_bias_;
+  std::vector<const lite::Tensor*> self_out_weight_;
+  std::vector<const lite::Tensor*> self_out_bias_;
+  std::vector<const lite::Tensor*> ffn_ln_weight_;
+  std::vector<const lite::Tensor*> ffn_ln_bias_;
+  std::vector<const lite::Tensor*> ffn_inter_weight_;
+  std::vector<const lite::Tensor*> ffn_inter_bias_;
+  std::vector<const lite::Tensor*> ffn_out_weight_;
+  std::vector<const lite::Tensor*> ffn_out_bias_;
+  const lite::Tensor* decoder_ln_weight_{};
+  const lite::Tensor* decoder_ln_bias_{};
+  const lite::Tensor* trans_weight_{};
+  const lite::Tensor* trans_bias_{};
+  const lite::Tensor* lm_ln_weight_{};
+  const lite::Tensor* lm_ln_bias_{};
+  const lite::Tensor* embedding_weight_{};
+  const lite::Tensor* embedding_bias_{};
+  const lite::Tensor* positional_embedding_weight_{};
+  const lite::Tensor* type_embedding_weight_{};
+  const lite::Tensor* role_id_{};
+  const lite::Tensor* decoder_role_id_{};
+  const lite::Tensor* role_embedding_table_{};
+  const lite::Tensor* position_ids_{};
+  const lite::Tensor* decoder_position_ids_{};
+  lite::Tensor* output_ids_{};
+  lite::Tensor* output_scores_{};
+  lite::Tensor* parent_ids_{};
+  lite::Tensor* sequence_length_{};
+  std::string decoding_strategy_;
+  int32_t beam_size_{};
+  int32_t topk_{};
+  float topp_{};
+  int32_t n_head_{};
+  int32_t size_per_head_{};
+  int32_t num_layer_{};
+  int32_t bos_id_{};
+  int32_t eos_id_{};
+  int64_t max_len_{};
+  float beam_search_diversity_rate_{};
+  int32_t unk_id_{};
+  int32_t mask_id_{};
+  float temperature_{};
+  float len_penalty_{};
+  bool normalize_before_{};
+  bool pos_bias_{};
+  std::string hidden_act_;
+  bool rel_len_{};
+  bool early_stopping_{};
+  int32_t min_length_{};
+};
+
+struct TemporalShiftParam : ParamBase {
+  const lite::Tensor* X{};
+  lite::Tensor* Out{};
+  int seg_num;
+  float shift_ratio{0.25f};
+  std::string data_format{"NCHW"};
+};
+
+struct EmptyParam : ParamBase {
+  lite::Tensor* ShapeTensor{nullptr};
+  std::vector<lite::Tensor*> ShapeTensorList{};
+  std::vector<int64_t> shape{};
+  int dtype{static_cast<int>(VarDescAPI::VarDataType::FP32)};
+  lite::Tensor* Out{};
+};
+
+struct ViterbiDecodeParam : ParamBase {
+  const lite::Tensor* input{};
+  const lite::Tensor* length{};
+  const lite::Tensor* transition{};
+  lite::Tensor* path{};
+  lite::Tensor* scores{};
+  bool include_bos_eos_tag{};
+};
+
+struct Atan2Param : ParamBase {
+  const lite::Tensor* X1{};
+  const lite::Tensor* X2{};
   lite::Tensor* Out{};
 };
 

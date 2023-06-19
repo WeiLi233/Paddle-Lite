@@ -31,6 +31,8 @@ WITH_AVX=ON
 WITH_OPENCL=OFF
 # options of compiling Metal lib for Mac OS.
 WITH_METAL=OFF
+# controls whether to block temporary 0dim pass, default is OFF
+SKIP_SUPPORT_0_DIM_TENSOR_PASS=OFF
 # options of compiling rockchip NPU lib.
 WITH_ROCKCHIP_NPU=OFF
 ROCKCHIP_NPU_SDK_ROOT="$(pwd)/rknpu_ddk"  # Download RKNPU SDK from https://github.com/airockchip/rknpu_ddk.git
@@ -78,6 +80,11 @@ KUNLUNXIN_XPU_XDNN_URL=""
 KUNLUNXIN_XPU_XRE_URL=""
 KUNLUNXIN_XPU_SDK_ENV=""
 KUNLUNXIN_XPU_SDK_ROOT=""
+# options of compiling baidu XFT lib (XFT depends on XDNN and XRE).
+WITH_KUNLUNXIN_XFT=OFF
+KUNLUNXIN_XFT_ENV=""
+KUNLUNXIN_XFT_URL=""
+KUNLUNXIN_XFT_ROOT=""
 # options of adding training ops
 WITH_TRAIN=OFF
 # options of building tiny publish so
@@ -90,6 +97,8 @@ WITH_PROFILE=OFF
 WITH_PRECISION_PROFILE=OFF
 # option of benchmark, default is OFF
 WITH_BENCHMARK=OFF
+# use Arm DNN library instead of built-in math library, defaults to OFF.
+WITH_ARM_DNN_LIBRARY=OFF
 # num of threads used during compiling..
 readonly NUM_PROC=${LITE_BUILD_THREADS:-4}
 #####################################################################################################
@@ -157,6 +166,12 @@ function init_cmake_mutable_options {
         WITH_TINY_PUBLISH=OFF
     fi
 
+    if [ "${WITH_KUNLUNXIN_XFT}" == "ON" ]; then
+        WITH_KUNLUNXIN_XPU=ON
+        WITH_EXTRA=ON
+        WITH_TINY_PUBLISH=OFF
+    fi
+
     if [ "${DNNADAPTER_WITH_KUNLUNXIN_XTCL}" == "ON" ]; then
         WITH_EXTRA=ON
         WITH_TINY_PUBLISH=OFF
@@ -192,6 +207,10 @@ function init_cmake_mutable_options {
                         -DXPU_XRE_URL=$KUNLUNXIN_XPU_XRE_URL \
                         -DXPU_SDK_ENV=$KUNLUNXIN_XPU_SDK_ENV \
                         -DXPU_SDK_ROOT=$KUNLUNXIN_XPU_SDK_ROOT \
+                        -DXPU_WITH_XFT=$WITH_KUNLUNXIN_XFT \
+                        -DXPU_XFT_ENV=$KUNLUNXIN_XFT_ENV \
+                        -DXPU_XFT_URL=$KUNLUNXIN_XFT_URL \
+                        -DXPU_XFT_ROOT=$KUNLUNXIN_XFT_ROOT \
                         -DLITE_WITH_TRAIN=$WITH_TRAIN  \
                         -DLITE_WITH_NNADAPTER=$WITH_NNADAPTER \
                         -DNNADAPTER_WITH_ROCKCHIP_NPU=$NNADAPTER_WITH_ROCKCHIP_NPU \
@@ -232,6 +251,8 @@ function init_cmake_mutable_options {
                         -DLITE_WITH_ARM82_FP16=$BUILD_ARM82_FP16 \
                         -DWITH_ARM_DOTPROD=$WITH_ARM_DOTPROD \
                         -DLITE_WITH_PRECISION_PROFILE=${WITH_PRECISION_PROFILE} \
+                        -DLITE_SKIP_SUPPORT_0_DIM_TENSOR_PASS=$SKIP_SUPPORT_0_DIM_TENSOR_PASS \
+                        -DLITE_WITH_ARM_DNN_LIBRARY=$WITH_ARM_DNN_LIBRARY \
                         -DLITE_ON_TINY_PUBLISH=$WITH_TINY_PUBLISH"
 
 }
@@ -442,6 +463,15 @@ function print_usage {
     echo -e "|             default is bdcentos_x86_64(if x86) / kylin_aarch64(if arm)                                                                               |"
     echo -e "|     --kunlunxin_xpu_sdk_root: (path to kunlunxin_xpu DDK file) optional, default is None                                                             |"
     echo -e "|  detailed information about Paddle-Lite KUNLUNXIN XPU:  https://paddle-lite.readthedocs.io/zh/latest/demo_guides/kunlunxin_xpu.html                  |"
+    echo -e "|                                                                                                                                                      |"
+    echo -e "|  arguments of kunlunxin xpu-xft library compiling:                                                                                                   |"
+    echo -e "|     --with_kunlunxin_xft: (OFF|ON); controls whether to enable xpu-xft lib for kunlunxin_xpu, default is OFF.                                        |"
+    echo -e "|     --kunlunxin_xft_env: (bdcentos6u3_x86_64_gcc82|bdcentos7u5_x86_64_gcc82|ubuntu1604_x86_64)                                                       |"
+    echo -e "|             'mandatory if --with_kunlunxin_xft=ON and --kunlunxin_xft_url is not empty                                                               |"
+    echo -e "|     --kunlunxin_xft_url: (kunlunxinj_xft sdk download url) optional, default is                                                                      |"
+    echo -e "|             'https://klx-sdk-release-public.su.bcebos.com/xft/dev/latest/'.                                                                          |"
+    echo -e "|     --kunlunxin_xft_root: (path to kunlunxin_xft file) optional, default is None                                                                     |"
+    echo -e "|             'if --kunlunxin_xft_root is not empty, we omit --kunlunxin_xft_url and --kunlunxin_xft_env'                                              |"
     echo "--------------------------------------------------------------------------------------------------------------------------------------------------------"
     echo
 }
@@ -511,6 +541,10 @@ function main {
                 ;;
             --with_avx=*)
                 WITH_AVX="${i#*=}"
+                shift
+                ;;
+            --skip_support_0_dim_tensor_pass=*)
+                SKIP_SUPPORT_0_DIM_TENSOR_PASS="${i#*=}"
                 shift
                 ;;
             # compiling lib which can operate on opencl and cpu.
@@ -721,6 +755,26 @@ function main {
                 fi
                 shift
                 ;;
+            # compiling lib which can operate on kunlunxin-xft .
+            --with_kunlunxin_xft=*)
+                WITH_KUNLUNXIN_XFT="${i#*=}"
+                shift
+                ;;
+            --kunlunxin_xft_env=*)
+                KUNLUNXIN_XFT_ENV="${i#*=}"
+                shift
+                ;;
+            --kunlunxin_xft_url=*)
+                KUNLUNXIN_XFT_URL="${i#*=}"
+                shift
+                ;;
+            --kunlunxin_xft_root=*)
+                KUNLUNXIN_XFT_ROOT="${i#*=}"
+                if [ -n "${KUNLUNXIN_XFT_ROOT}" ]; then
+                    KUNLUNXIN_XFT_ROOT=$(readlink -f ${KUNLUNXIN_XFT_ROOT})
+                fi
+                shift
+                ;;
             # controls whether to include FP16 kernels, default is OFF
             --with_arm82_fp16=*)
                 BUILD_ARM82_FP16="${i#*=}"
@@ -746,6 +800,11 @@ function main {
             # ON or OFF, default OFF
             --with_train=*)
                 WITH_TRAIN="${i#*=}"
+                shift
+                ;;
+            # use Arm DNN library
+             --with_arm_dnn_library=*)
+                WITH_ARM_DNN_LIBRARY="${i#*=}"
                 shift
                 ;;
             # compiling result contains both light_api and cxx_api lib.

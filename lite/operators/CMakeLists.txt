@@ -65,6 +65,8 @@ add_operator(pow_op extra SRCS pow_op.cc)
 add_operator(sign_op extra SRCS sign_op.cc)
 add_operator(rnn_op extra SRCS rnn_op.cc)
 
+add_operator(empty_op extra SRCS empty_op.cc)
+
 # 2.basic ops not used in basic models
 add_operator(negative_op extra SRCS negative_op.cc)
 add_operator(crop_op extra SRCS crop_op.cc)
@@ -74,6 +76,7 @@ add_operator(group_norm_op extra SRCS group_norm_op.cc)
 add_operator(norm_op extra SRCS norm_op.cc)
 
 # 3.extra ops
+add_operator(bitwise_ops extra SRCS bitwise_ops.cc)
 add_operator(reverse_op extra SRCS reverse_op.cc)
 add_operator(inverse_op extra SRCS inverse_op.cc)
 add_operator(sparse_conv_op extra SRCS sparse_conv_op.cc)
@@ -172,6 +175,7 @@ add_operator(log_softmax_op extra SRCS log_softmax_op.cc)
 add_operator(roll_op extra SRCS roll_op.cc)
 add_operator(share_data extra SRCS share_data_op.cc)
 add_operator(round extra SRCS round_op.cc)
+add_operator(fused_attention_op extra SRCS fused_attention_op.cc)
 
 # for OCR specific
 add_operator(while_op extra SRCS while_op.cc)
@@ -208,6 +212,9 @@ add_operator(strided_slice_op extra SRCS strided_slice_op.cc)
 add_operator(where_op extra SRCS where_op.cc)
 add_operator(unique_with_counts_op extra SRCS unique_with_counts_op.cc)
 add_operator(unique_op extra SRCS unique_op.cc)
+add_operator(viterbi_decode extra SRCS viterbi_decode_op.cc)
+add_operator(atan2 extra SRCS atan2_op.cc)
+
 
 # for content-dnn specific
 add_operator(search_aligned_mat_mul_op extra SRCS search_aligned_mat_mul_op.cc)
@@ -216,8 +223,12 @@ add_operator(sequence_topk_avg_pooling_op basic SRCS sequence_topk_avg_pooling_o
 add_operator(search_fc_op basic SRCS search_fc_op.cc)
 add_operator(lstm_op extra SRCS lstm_op.cc)
 add_operator(topk_pooling_op extra SRCS topk_pooling_op.cc)
+
 # for deformable-convNet
 add_operator(deformable_conv_op extra SRCS deformable_conv_op.cc)
+
+# for tsm model
+add_operator(temporal_shift_op extra SRCS temporal_shift_op.cc)
 
 # 4. training op
 add_operator(mean_op extra SRCS mean_op.cc)
@@ -237,6 +248,7 @@ add_operator(__xpu__embedding_with_eltwise_add_op extra SRCS __xpu__embedding_wi
 add_operator(__xpu__fc_op extra SRCS __xpu__fc_op.cc)
 add_operator(__xpu__quick_gelu_op extra SRCS __xpu__quick_gelu_op.cc)
 add_operator(__xpu__roformer_relative_embedding_op extra SRCS __xpu__roformer_relative_embedding_op.cc)
+add_operator(__xpu__mask_adaptive_op extra SRCS __xpu__mask_adaptive_op.cc)
 add_operator(__xpu__search_attention_op extra SRCS __xpu__search_attention_op.cc)
 add_operator(__xpu__mmdnn_op extra SRCS __xpu__mmdnn_op.cc)
 add_operator(__xpu__conv2d_op extra SRCS __xpu__conv2d_op.cc)
@@ -246,6 +258,20 @@ add_operator(__xpu__squeeze_excitation_op extra SRCS __xpu__squeeze_excitation_o
 add_operator(__xpu__bigru_op extra SRCS __xpu__bigru_op.cc)
 add_operator(__xpu__dynamic_lstm_fuse_op extra SRCS __xpu__dynamic_lstm_fuse_op.cc)
 add_operator(__xpu__multi_softmax_op extra SRCS __xpu__multi_softmax_op.cc)
+add_operator(__xpu__gn_silu_op extra SRCS __xpu__gn_silu_op.cc)
+add_operator(__xpu__multihead_self_attn_op extra SRCS __xpu__multihead_self_attn_op.cc)
+add_operator(__xpu__multihead_cross_attn_op extra SRCS __xpu__multihead_cross_attn_op.cc)
+add_operator(__xpu__geglu_op extra SRCS __xpu__geglu_op.cc)
+
+if(XPU_WITH_XFT)
+    add_operator(fusion_decoding_op extra SRCS fusion_decoding_op.cc)
+    add_operator(fusion_unified_decoding_op extra SRCS fusion_unified_decoding_op.cc)
+    add_operator(__xpu__spatial_transformer_resblock_op extra SRCS __xpu__spatial_transformer_resblock_op.cc)
+    add_operator(__xpu__spatial_transformer_op XPU extra SRCS __xpu__spatial_transformer_op.cc)
+    add_operator(__xpu__matmul_scale_softmax_v1_op extra SRCS __xpu__matmul_scale_softmax_v1_op.cc)
+    add_operator(__xpu__up_decoder_op extra SRCS __xpu__up_decoder_op.cc)
+    add_operator(__xpu__multi_up_decoder_op extra SRCS __xpu__multi_up_decoder_op.cc)
+endif()
 
 add_library(ops STATIC ${OPS_SRC} op_params.cc)
 add_dependencies(ops utils)
